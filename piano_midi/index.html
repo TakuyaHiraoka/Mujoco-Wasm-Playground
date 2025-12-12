@@ -16,7 +16,7 @@
   }
   </script>
 
-  <!-- SoundFont（任意）: チェックON時だけ使う -->
+  <!-- SoundFont（任意） -->
   <script src="https://cdn.jsdelivr.net/npm/soundfont-player@0.12.0/dist/soundfont-player.min.js"></script>
 </head>
 
@@ -43,13 +43,24 @@
       </label>
 
       <label class="chk">
+        <input id="loop" type="checkbox" checked />
+        Loop
+      </label>
+
+      <label class="chk">
+        <input id="clickPlay" type="checkbox" checked />
+        クリック演奏
+      </label>
+
+      <label class="chk">
         <input id="useSoundfont" type="checkbox" />
         SoundFontピアノ（重め）
       </label>
     </div>
 
     <div class="row hint">
-      ※ まずは適当な .mid を読み込んで Play。音と鍵盤が一致するはず。
+      ・クリック演奏: 鍵盤をクリック/ドラッグで弾けます（離すとOFF）<br/>
+      ・デフォルトMIDI: <code>piano_midi/midis/default.mid</code> があれば起動時に読み込みます
     </div>
   </div>
 

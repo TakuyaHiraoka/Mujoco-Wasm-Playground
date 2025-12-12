@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import load_mujoco from "https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js";
-import { Midi } from "https://esm.sh/@tonejs/midi@2.0.28"; // MIDIパース用（ブラウザ向けに解決してくれる）
+import { Midi } from "https://esm.sh/@tonejs/midi@2.0.28";
 
 const UI = {
   status: document.getElementById("status"),
@@ -11,16 +11,16 @@ const UI = {
   stop: document.getElementById("stop"),
   speed: document.getElementById("speed"),
   speedValue: document.getElementById("speedValue"),
+  loop: document.getElementById("loop"),
+  clickPlay: document.getElementById("clickPlay"),
   useSoundfont: document.getElementById("useSoundfont"),
 };
 
 const FIRST_MIDI = 21; // A0
 const N_KEYS = 88;
 
-function isBlackMidi(midiNote) {
-  const m = midiNote % 12;
-  return m === 1 || m === 3 || m === 6 || m === 8 || m === 10;
-}
+// ここを変えると “デフォルト曲” を変えられます
+const DEFAULT_MIDI_URL = "./midis/default.mid";
 
 // --------------------
 // Three.js
@@ -46,8 +46,13 @@ dir.position.set(1.2, -0.6, 2.0);
 scene.add(dir);
 
 // --------------------
-// Piano geometry layout
+// Piano layout
 // --------------------
+function isBlackMidi(midiNote) {
+  const m = midiNote % 12;
+  return m === 1 || m === 3 || m === 6 || m === 8 || m === 10;
+}
+
 function buildKeyInfos() {
   const whitePitch = 0.023;
   let whiteIndex = 0;
@@ -62,14 +67,11 @@ function buildKeyInfos() {
     else { x = whiteIndex * whitePitch; whiteIndex += 1; }
 
     infos.push({
-      midi,
-      black,
-      x,
+      midi, black, x,
       width:  black ? 0.014 : 0.022,
       length: black ? 0.090 : 0.140,
       height: 0.020,
       pivotZ: black ? 0.030 : 0.022,
-      // 見た目で分かるように少し深め
       pressAngle: black ? -0.10 : -0.12
     });
   }
@@ -81,7 +83,7 @@ function buildKeyInfos() {
 const keyInfos = buildKeyInfos();
 
 // --------------------
-// MJCF生成（鍵盤のみ）
+// MJCF
 // --------------------
 function mjcfPiano(keys) {
   const xs = keys.map(k => k.x);
@@ -113,7 +115,6 @@ function mjcfPiano(keys) {
 
     xml += `      <body name="key_${i}" pos="${k.x.toFixed(4)} 0 ${k.pivotZ.toFixed(4)}">\n`;
     xml += `        <joint name="key_joint_${i}" axis="1 0 0" range="${k.pressAngle.toFixed(4)} 0"/>\n`;
-    // pivot を後端にして、geom中心は前方へ hy
     xml += `        <geom name="key_geom_${i}" type="box" size="${hx} ${hy} ${hz}" pos="0 ${hy} 0" rgba="${rgba}"/>\n`;
     xml += `      </body>\n`;
   }
@@ -129,9 +130,7 @@ function mjcfPiano(keys) {
 // --------------------
 UI.status.textContent = "Loading MuJoCo WASM…";
 const MUJOCO_CDN_BASE = "https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/";
-const mujoco = await load_mujoco({
-  locateFile: (p) => `${MUJOCO_CDN_BASE}${p}`,
-});
+const mujoco = await load_mujoco({ locateFile: (p) => `${MUJOCO_CDN_BASE}${p}` });
 
 mujoco.FS.mkdir("/working");
 mujoco.FS.mount(mujoco.MEMFS, { root: "." }, "/working");
@@ -141,7 +140,6 @@ const model = mujoco.MjModel.loadFromXML("/working/piano.xml");
 const data  = new mujoco.MjData(model);
 mujoco.mj_forward(model, data);
 
-// safe getter
 const val = (x) => (typeof x === "function" ? x() : x);
 const ngeom = val(model.ngeom);
 const geom_type = val(model.geom_type);
@@ -151,7 +149,7 @@ const geom_rgba = val(model.geom_rgba);
 const mjGEOM_PLANE = 0;
 const mjGEOM_BOX = 6;
 
-// geom mesh build
+// build meshes
 const meshes = new Array(ngeom);
 for (let gi = 0; gi < ngeom; gi++) {
   const t = geom_type[gi];
@@ -180,15 +178,26 @@ for (let gi = 0; gi < ngeom; gi++) {
   scene.add(mesh);
 }
 
+// キーのクリック対象メッシュ（base=0, keys=1..88 を前提）
+const keyClickMeshes = [];
+for (let i = 0; i < N_KEYS; i++) {
+  const m = meshes[1 + i];
+  if (m) {
+    m.userData.keyIndex = i;
+    keyClickMeshes.push(m);
+  }
+}
+
+// --------------------
+// Colors
+// --------------------
 const matWhite = new THREE.MeshStandardMaterial({ color: 0xf0f0f0 });
 const matBlack = new THREE.MeshStandardMaterial({ color: 0x111111 });
 const matOn    = new THREE.MeshStandardMaterial({ color: 0x40ff40 });
 
-// gi=0 は base, gi=1..88 は key_geom_0..87 の順（生成順）
 function updateKeyMaterials(noteCounts) {
   for (let i = 0; i < N_KEYS; i++) {
-    const gi = 1 + i;
-    const mesh = meshes[gi];
+    const mesh = meshes[1 + i];
     if (!mesh) continue;
     const on = noteCounts[i] > 0;
     if (on) mesh.material = matOn;
@@ -200,21 +209,21 @@ function updateKeyMaterials(noteCounts) {
 // MIDI → events
 // --------------------
 let events = []; // {time, keyIndex, on, velocity}
-let noteCounts = new Int16Array(N_KEYS);
+let songName = "(demo)";
 
 function buildEventsFromMidi(midiObj) {
   const ev = [];
-  // トラック全体を混ぜる（ドラムch=9は除外）
   for (const tr of midiObj.tracks) {
-    if (tr.channel === 9) continue;
+    if (tr.channel === 9) continue; // drums
     for (const n of tr.notes) {
       const keyIndex = n.midi - FIRST_MIDI;
       if (keyIndex < 0 || keyIndex >= N_KEYS) continue;
-      ev.push({ time: n.time, keyIndex, on: true,  velocity: n.velocity ?? 0.8 });
-      ev.push({ time: n.time + n.duration, keyIndex, on: false, velocity: n.velocity ?? 0.8 });
+      const vel = n.velocity ?? 0.8;
+      ev.push({ time: n.time, keyIndex, on: true,  velocity: vel });
+      ev.push({ time: n.time + n.duration, keyIndex, on: false, velocity: vel });
     }
   }
-  ev.sort((a,b) => (a.time - b.time) || ((a.on===b.on)?0:(a.on? -1 : 1))); // 同時刻はON→OFF
+  ev.sort((a,b) => (a.time - b.time) || ((a.on===b.on)?0:(a.on? -1 : 1)));
   return ev;
 }
 
@@ -222,55 +231,55 @@ function buildEventsFromMidi(midiObj) {
 // Audio (simple synth + optional soundfont)
 // --------------------
 let audioCtx = null;
-
-// simple synth voices: keyIndex -> voice list
 const synthVoices = Array.from({ length: N_KEYS }, () => []);
-function keyToFreq(keyIndex) {
-  const midi = FIRST_MIDI + keyIndex;
-  return 440 * Math.pow(2, (midi - 69) / 12);
-}
+
 function ensureAudioCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return audioCtx;
 }
 
-let sfInstrument = null; // Soundfont instrument
+function keyToFreq(keyIndex) {
+  const midi = FIRST_MIDI + keyIndex;
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+let sfInstrument = null;
 async function ensureSoundfontPiano() {
   const ac = ensureAudioCtx();
-  if (sfInstrument) return sfInstrument;
-
   const Soundfont = globalThis.Soundfont;
   if (!Soundfont) throw new Error("soundfont-player が読み込まれていません");
 
   UI.status.textContent = "Loading SoundFont piano…";
-  // FluidR3_GM の例（軽め） :contentReference[oaicite:1]{index=1}
   sfInstrument = await Soundfont.instrument(ac, "acoustic_grand_piano", { soundfont: "FluidR3_GM" });
-  UI.status.textContent = "Ready";
+  UI.status.textContent = `Ready (${songName})`;
   return sfInstrument;
 }
 
 function noteOnAudio(keyIndex, velocity) {
   const ac = ensureAudioCtx();
-  const useSF = UI.useSoundfont.checked;
 
-  if (useSF && sfInstrument) {
-    // soundfont-player は midi 番号で play できる :contentReference[oaicite:2]{index=2}
-    const midi = FIRST_MIDI + keyIndex;
-    const player = sfInstrument.play(midi, ac.currentTime, { gain: 0.7 * velocity });
-    synthVoices[keyIndex].push({ kind: "sf", player });
-    return;
+  // gestureが無いと鳴らないことがあるので、可能なら resume（失敗しても無視）
+  if (ac.state === "suspended") ac.resume().catch(()=>{});
+
+  // SoundFontがONなら、準備できてる時だけ使う（未ロードなら裏でロード開始しつつ一旦synth）
+  if (UI.useSoundfont.checked) {
+    if (!sfInstrument) ensureSoundfontPiano().catch(()=>{});
+    if (sfInstrument) {
+      const midi = FIRST_MIDI + keyIndex;
+      const player = sfInstrument.play(midi, ac.currentTime, { gain: 0.7 * (velocity ?? 0.8) });
+      synthVoices[keyIndex].push({ kind: "sf", player });
+      return;
+    }
   }
 
   // simple synth
   const osc = ac.createOscillator();
   const gain = ac.createGain();
-
   osc.type = "triangle";
   osc.frequency.value = keyToFreq(keyIndex);
 
   const now = ac.currentTime;
-  const amp = 0.08 * velocity;
-
+  const amp = 0.08 * (velocity ?? 0.8);
   gain.gain.setValueAtTime(0.0001, now);
   gain.gain.linearRampToValueAtTime(amp, now + 0.01);
 
@@ -309,63 +318,84 @@ function stopAllAudio() {
 }
 
 // --------------------
-// Playback
+// Playback state
 // --------------------
 let playing = false;
 let songTime = 0;
 let eventIdx = 0;
 
-// 物理遅れゼロにするため、角度を qpos に直接入れる（少しだけ滑らかに）
-const keyAngles = new Float32Array(N_KEYS);
-const KEY_RESP = 70; // 大きいほど追従速い（見た目と音を揃えたいので速め）
+// MIDI由来 / クリック由来を分ける（混ざっても壊れない）
+const midiCounts = new Int16Array(N_KEYS);
+const manualCounts = new Int16Array(N_KEYS);
+const noteCounts = new Int16Array(N_KEYS);
 
-function resetAll() {
-  playing = false;
+// 見た目
+const keyAngles = new Float32Array(N_KEYS);
+const KEY_RESP = 70;
+
+function recomputeKey(i, velocityHint = 0.8) {
+  const prev = noteCounts[i];
+  const cur = midiCounts[i] + manualCounts[i];
+  noteCounts[i] = cur;
+
+  if (prev === 0 && cur > 0) noteOnAudio(i, velocityHint);
+  if (prev > 0 && cur === 0) noteOffAudio(i);
+}
+
+function recomputeAll() {
+  for (let i = 0; i < N_KEYS; i++) {
+    // velocityHint は適当
+    recomputeKey(i, 0.8);
+  }
+}
+
+function restartSong(keepPlaying) {
   songTime = 0;
   eventIdx = 0;
+
+  midiCounts.fill(0);
+  manualCounts.fill(0);
   noteCounts.fill(0);
   keyAngles.fill(0);
-  stopAllAudio();
 
-  // 角度をゼロに
+  stopAllAudio();
+  updateKeyMaterials(noteCounts);
+
+  // qpos/qvelを初期化（鍵盤角度ゼロ）
   for (let i = 0; i < N_KEYS; i++) {
     data.qpos[i] = 0;
     data.qvel[i] = 0;
   }
   mujoco.mj_forward(model, data);
-  updateKeyMaterials(noteCounts);
+
+  playing = !!keepPlaying;
+  UI.playPause.textContent = playing ? "⏸ Pause" : "▶︎ Play";
+  UI.status.textContent = `Ready (${songName})`;
 }
 
+// --------------------
+// UI events
+// --------------------
 UI.speed.addEventListener("input", () => {
   UI.speedValue.textContent = `${Number(UI.speed.value).toFixed(2)}x`;
 });
 
 UI.playPause.addEventListener("click", async () => {
-  try {
-    const ac = ensureAudioCtx();
-    if (ac.state === "suspended") await ac.resume();
+  const ac = ensureAudioCtx();
+  if (ac.state === "suspended") await ac.resume();
 
-    // SoundFont ON ならここでロード（初回だけ時間かかる）
-    if (UI.useSoundfont.checked) {
-      await ensureSoundfontPiano();
-    } else {
-      UI.status.textContent = "Ready";
-    }
-
-    playing = !playing;
-    UI.playPause.textContent = playing ? "⏸ Pause" : "▶︎ Play";
-
-    // pause時は音を止める（再開時は次のnote-onから）
-    if (!playing) stopAllAudio();
-  } catch (e) {
-    console.error(e);
-    UI.status.textContent = `Audio init error: ${e?.message ?? e}`;
+  // SoundFont ONなら初回ロード
+  if (UI.useSoundfont.checked && !sfInstrument) {
+    try { await ensureSoundfontPiano(); } catch (e) { console.error(e); }
   }
+
+  playing = !playing;
+  UI.playPause.textContent = playing ? "⏸ Pause" : "▶︎ Play";
+  if (!playing) stopAllAudio();
 });
 
 UI.stop.addEventListener("click", () => {
-  resetAll();
-  UI.playPause.textContent = "▶︎ Play";
+  restartSong(false);
 });
 
 UI.midiFile.addEventListener("change", async (e) => {
@@ -377,33 +407,114 @@ UI.midiFile.addEventListener("change", async (e) => {
     const buf = await file.arrayBuffer();
     const midi = new Midi(buf);
     events = buildEventsFromMidi(midi);
-
-    UI.status.textContent = `Loaded: ${file.name} / events=${events.length}`;
-    resetAll();
-    playing = true;
-    UI.playPause.textContent = "⏸ Pause";
+    songName = file.name;
+    UI.status.textContent = `Loaded: ${songName} / events=${events.length}`;
+    restartSong(false);
   } catch (err) {
     console.error(err);
     UI.status.textContent = `MIDI parse error: ${err?.message ?? err}`;
   }
 });
 
-// 初期デモ（Cメジャースケール）
-(function initDemo() {
+// --------------------
+// Default demo + default MIDI load
+// --------------------
+function loadDemoScale() {
   const notes = [60,62,64,65,67,69,71,72];
   const dur = 0.22, gap = 0.02;
   let t = 0;
-  events = [];
+  const ev = [];
   for (const n of notes) {
     const k = n - FIRST_MIDI;
     if (k < 0 || k >= N_KEYS) continue;
-    events.push({ time: t, keyIndex: k, on:true, velocity:0.9 });
-    events.push({ time: t+dur, keyIndex: k, on:false, velocity:0.9 });
+    ev.push({ time: t, keyIndex: k, on:true,  velocity:0.9 });
+    ev.push({ time: t+dur, keyIndex: k, on:false, velocity:0.9 });
     t += dur + gap;
   }
-  events.sort((a,b)=>a.time-b.time);
-  UI.status.textContent = "Ready (demo scale)";
-})();
+  events = ev;
+  songName = "(demo scale)";
+}
+
+async function tryLoadDefaultMidi() {
+  try {
+    const res = await fetch(DEFAULT_MIDI_URL, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = await res.arrayBuffer();
+    const midi = new Midi(buf);
+    events = buildEventsFromMidi(midi);
+    songName = "default.mid";
+    UI.status.textContent = `Loaded default: ${songName} / events=${events.length}`;
+  } catch {
+    // 無ければデモ
+    loadDemoScale();
+    UI.status.textContent = `Ready (${songName})`;
+  }
+  restartSong(false);
+}
+
+await tryLoadDefaultMidi();
+
+// --------------------
+// Mouse click play (raycast)
+// --------------------
+const raycaster = new THREE.Raycaster();
+const mouseNdc = new THREE.Vector2();
+let heldKey = null;
+
+function pickKeyFromPointer(ev) {
+  const rect = canvas.getBoundingClientRect();
+  mouseNdc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  mouseNdc.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
+
+  raycaster.setFromCamera(mouseNdc, camera);
+  const hits = raycaster.intersectObjects(keyClickMeshes, false);
+  if (!hits.length) return null;
+
+  const obj = hits[0].object;
+  const idx = obj.userData.keyIndex;
+  return (typeof idx === "number") ? idx : null;
+}
+
+function setManualKey(i, isDown, velocity = 0.9) {
+  if (i == null) return;
+  manualCounts[i] = isDown ? 1 : 0;
+  recomputeKey(i, velocity);
+}
+
+canvas.addEventListener("pointerdown", (ev) => {
+  if (!UI.clickPlay.checked) return;
+
+  const i = pickKeyFromPointer(ev);
+  if (i == null) return;
+
+  heldKey = i;
+  setManualKey(i, true, 0.9);
+  updateKeyMaterials(noteCounts);
+
+  // pointer capture でドラッグしても追える
+  canvas.setPointerCapture?.(ev.pointerId);
+});
+
+canvas.addEventListener("pointermove", (ev) => {
+  if (!UI.clickPlay.checked) return;
+  if (heldKey == null) return;
+
+  const i = pickKeyFromPointer(ev);
+  if (i == null || i === heldKey) return;
+
+  // 押し替え（ドラッグ演奏）
+  setManualKey(heldKey, false);
+  heldKey = i;
+  setManualKey(heldKey, true, 0.9);
+  updateKeyMaterials(noteCounts);
+});
+
+window.addEventListener("pointerup", () => {
+  if (heldKey == null) return;
+  setManualKey(heldKey, false);
+  heldKey = null;
+  updateKeyMaterials(noteCounts);
+});
 
 // --------------------
 // Render update from geom_xpos/xmat
@@ -454,47 +565,41 @@ function animate() {
   const realDt = Math.min(0.05, (now - last) / 1000);
   last = now;
 
-  if (playing) {
+  if (playing && events.length) {
     const speed = Number(UI.speed.value);
     songTime += realDt * speed;
 
-    // events を songTime まで適用
     while (eventIdx < events.length && events[eventIdx].time <= songTime) {
       const ev = events[eventIdx++];
       const i = ev.keyIndex;
 
-      if (ev.on) {
-        const prev = noteCounts[i];
-        noteCounts[i] = prev + 1;
-        if (prev === 0) noteOnAudio(i, ev.velocity ?? 0.8);
-      } else {
-        const prev = noteCounts[i];
-        noteCounts[i] = Math.max(0, prev - 1);
-        if (prev === 1 && noteCounts[i] === 0) noteOffAudio(i);
-      }
+      const prevMidi = midiCounts[i];
+      midiCounts[i] = ev.on ? (prevMidi + 1) : Math.max(0, prevMidi - 1);
+      recomputeKey(i, ev.velocity ?? 0.8);
     }
 
-    // 鍵盤角度を即時追従（わずかにスムージング）
+    // 見た目：角度を追従
     const alpha = 1 - Math.exp(-KEY_RESP * realDt);
     for (let i = 0; i < N_KEYS; i++) {
       const target = noteCounts[i] > 0 ? keyInfos[i].pressAngle : 0;
       keyAngles[i] += (target - keyAngles[i]) * alpha;
-
       data.qpos[i] = keyAngles[i];
       data.qvel[i] = 0;
     }
     mujoco.mj_forward(model, data);
-
     updateKeyMaterials(noteCounts);
 
-    // 曲終わり
+    // 曲終端
     if (eventIdx >= events.length) {
-      playing = false;
-      UI.playPause.textContent = "▶︎ Play";
-      stopAllAudio();
+      if (UI.loop.checked) {
+        restartSong(true); // ← 自動繰り返し
+      } else {
+        playing = false;
+        UI.playPause.textContent = "▶︎ Play";
+        stopAllAudio();
+      }
     }
   } else {
-    // not playing: forward & render only
     mujoco.mj_forward(model, data);
   }
 

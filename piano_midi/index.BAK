@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>MuJoCo WASM Piano (MIDI)</title>
+  <link rel="stylesheet" href="./style.css" />
+
+  <!-- three を bare import で使えるように -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <!-- SoundFont（任意）: チェックON時だけ使う -->
+  <script src="https://cdn.jsdelivr.net/npm/soundfont-player@0.12.0/dist/soundfont-player.min.js"></script>
+</head>
+
+<body>
+  <div id="ui">
+    <div class="row">
+      <div class="title">MuJoCo WASM Piano (MIDI)</div>
+      <div id="status" class="status">Loading…</div>
+    </div>
+
+    <div class="row controls">
+      <label class="filebtn">
+        MIDIを選択
+        <input id="midiFile" type="file" accept=".mid,.midi" />
+      </label>
+
+      <button id="playPause" class="btn">▶︎ Play</button>
+      <button id="stop" class="btn">⏹ Stop</button>
+
+      <label class="range">
+        Speed
+        <input id="speed" type="range" min="0.25" max="2.0" step="0.05" value="1.0" />
+        <span id="speedValue">1.00x</span>
+      </label>
+
+      <label class="chk">
+        <input id="useSoundfont" type="checkbox" />
+        SoundFontピアノ（重め）
+      </label>
+    </div>
+
+    <div class="row hint">
+      ※ まずは適当な .mid を読み込んで Play。音と鍵盤が一致するはず。
+    </div>
+  </div>
+
+  <canvas id="c"></canvas>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
