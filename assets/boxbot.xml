@@ -1,0 +1,23 @@
+<mujoco model="boxbot">
+  <compiler angle="degree" coordinate="local"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+
+  <default>
+    <geom friction="1.2 0.3 0.1" density="400"/>
+  </default>
+
+  <worldbody>
+    <light pos="0 0 6" dir="0 0 -1" diffuse="1 1 1" />
+    <geom name="floor" type="plane" size="10 10 0.1" rgba="0.12 0.12 0.15 1"/>
+
+    <body name="box" pos="0 0 0.5">
+      <freejoint/>
+      <!-- Â‚¢“·‘Ì -->
+      <geom type="box" size="0.18 0.12 0.08" rgba="0.12 0.25 0.80 1"/>
+      <!-- ”’‚¢“ª -->
+      <geom type="box" pos="0 0 0.14" size="0.08 0.06 0.06" rgba="0.92 0.92 0.94 1"/>
+      <!-- Ô‚¢ƒRƒA -->
+      <geom type="box" pos="0.16 0 0.00" size="0.05 0.04 0.04" rgba="0.85 0.15 0.15 1"/>
+    </body>
+  </worldbody>
+</mujoco>

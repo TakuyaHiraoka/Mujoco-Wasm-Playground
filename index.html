@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>MuJoCo WASM (Simple)</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+
+    <div id="hud">
+      <div class="title">MuJoCo WASM (Simple)</div>
+      <div class="help">
+        操作: WASD=水平に押す / Space=上に押す / R=リセット / P=一時停止
+      </div>
+      <div id="status"></div>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
