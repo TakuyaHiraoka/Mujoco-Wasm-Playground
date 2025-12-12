@@ -1,8 +1,8 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import { OrbitControls } from "https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js";
 
-//import load_mujoco from "./dist/mujoco_wasm.js"; // mujoco_wasm README ‚Ì‘z’èƒpƒX :contentReference[oaicite:2]{index=2}
 import load_mujoco from "https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js";
+
 
 
 const canvas = document.getElementById("c");
