@@ -66,12 +66,18 @@ function buildKeyInfos() {
     if (black) x = (whiteIndex - 0.5) * whitePitch;
     else { x = whiteIndex * whitePitch; whiteIndex += 1; }
 
+    // ★追加：黒鍵を奥（+y）にずらす
+    const y = black ? 0.060 : 0.000;
+
+    // ★改善：白鍵はベース上面に乗るように、黒鍵はさらに少し高く
+    const pivotZ = black ? 0.040 : 0.030;
+
     infos.push({
-      midi, black, x,
+      midi, black, x, y,
       width:  black ? 0.014 : 0.022,
       length: black ? 0.090 : 0.140,
       height: 0.020,
-      pivotZ: black ? 0.030 : 0.022,
+      pivotZ,
       pressAngle: black ? -0.10 : -0.12
     });
   }
@@ -80,6 +86,7 @@ function buildKeyInfos() {
   for (const k of infos) k.x -= centerX;
   return infos;
 }
+
 const keyInfos = buildKeyInfos();
 
 // --------------------
@@ -113,7 +120,9 @@ function mjcfPiano(keys) {
     const hz = (k.height / 2).toFixed(4);
     const rgba = k.black ? "0.08 0.08 0.08 1" : "0.95 0.95 0.95 1";
 
-    xml += `      <body name="key_${i}" pos="${k.x.toFixed(4)} 0 ${k.pivotZ.toFixed(4)}">\n`;
+    //xml += `      <body name="key_${i}" pos="${k.x.toFixed(4)} 0 ${k.pivotZ.toFixed(4)}">\n`;
+    xml += `      <body name="key_${i}" pos="${k.x.toFixed(4)} ${k.y.toFixed(4)} ${k.pivotZ.toFixed(4)}">\n`;
+
     xml += `        <joint name="key_joint_${i}" axis="1 0 0" range="${k.pressAngle.toFixed(4)} 0"/>\n`;
     xml += `        <geom name="key_geom_${i}" type="box" size="${hx} ${hy} ${hz}" pos="0 ${hy} 0" rgba="${rgba}"/>\n`;
     xml += `      </body>\n`;
