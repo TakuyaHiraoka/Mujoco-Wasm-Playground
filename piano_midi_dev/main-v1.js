@@ -384,7 +384,6 @@ function restartSong(keepPlaying) {
 
   playing = !!keepPlaying;
   UI.playPause.textContent = playing ? "⏸ Pause" : "▶︎ Play";
-  UI.playPause.setAttribute("aria-pressed", String(playing));
   UI.status.textContent = `Ready (${songName})`;
 }
 
@@ -406,7 +405,6 @@ UI.playPause.addEventListener("click", async () => {
 
   playing = !playing;
   UI.playPause.textContent = playing ? "⏸ Pause" : "▶︎ Play";
-  UI.playPause.setAttribute("aria-pressed", String(playing));
   if (!playing) stopAllAudio();
 });
 
@@ -425,7 +423,7 @@ UI.midiFile.addEventListener("change", async (e) => {
     events = buildEventsFromMidi(midi);
     songName = file.name;
     UI.status.textContent = `Loaded: ${songName} / events=${events.length}`;
-    restartSong(True);
+    restartSong(false);
   } catch (err) {
     console.error(err);
     UI.status.textContent = `MIDI parse error: ${err?.message ?? err}`;

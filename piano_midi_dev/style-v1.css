@@ -45,58 +45,30 @@ body{
   display:block;
 }
 
-/* Stronger falling snow (CSS-only) */
-#c{ z-index:1; } /* ensure snow overlays the canvas but stays under the UI */
-
+/* Soft falling snow (CSS-only, lightweight) */
 body::before,
 body::after{
   content:"";
   position:fixed;
   inset:0;
   pointer-events:none;
-
-  /* Denser snowflakes */
   background-image:
-    radial-gradient(2px 2px at 18px 26px, rgba(255,255,255,.92) 50%, transparent 51%),
-    radial-gradient(1px 1px at 62px 104px, rgba(255,255,255,.70) 50%, transparent 51%),
-    radial-gradient(1.5px 1.5px at 128px 44px, rgba(255,255,255,.80) 50%, transparent 51%),
-    radial-gradient(1px 1px at 44px 146px, rgba(255,255,255,.62) 50%, transparent 51%),
-    radial-gradient(2px 2px at 156px 162px, rgba(255,255,255,.84) 50%, transparent 51%),
-    radial-gradient(1px 1px at 186px 70px, rgba(255,255,255,.55) 50%, transparent 51%),
-    radial-gradient(1px 1px at 104px 176px, rgba(255,255,255,.58) 50%, transparent 51%),
-    radial-gradient(2px 2px at 206px 122px, rgba(255,255,255,.76) 50%, transparent 51%);
-  background-size:180px 180px;
-
-  opacity:.48;
-  filter: blur(.2px);
-  will-change: transform, background-position;
-
-  animation:
-    snowFall 10s linear infinite,
-    snowDrift 6s ease-in-out infinite alternate;
-
-  z-index:2;
-}
-
-body::after{
-  /* Far layer: larger tile + softer flakes */
-  background-size:280px 280px;
+    radial-gradient(2px 2px at 20px 30px, rgba(255,255,255,.75) 50%, transparent 51%),
+    radial-gradient(1px 1px at 120px 80px, rgba(255,255,255,.55) 50%, transparent 51%),
+    radial-gradient(1px 1px at 40px 160px, rgba(255,255,255,.45) 50%, transparent 51%),
+    radial-gradient(2px 2px at 180px 140px, rgba(255,255,255,.65) 50%, transparent 51%);
+  background-size:220px 220px;
   opacity:.30;
-  filter: blur(.7px);
-
-  animation-duration: 18s, 9s;
+  animation:snow 14s linear infinite;
+  z-index:0;
 }
-
-@keyframes snowFall{
-  from{ background-position:0 -220px; }
-  to  { background-position:0 980px; }
+body::after{
+  background-size:320px 320px;
+  opacity:.18;
+  animation-duration:22s;
 }
-
-@keyframes snowDrift{
-  from{ transform: translateX(-10px); }
-  to  { transform: translateX(10px); }
-}
-
+@keyframes snow{
+  from{ background-position:0 0; }
   to{ background-position:0 520px; }
 }
 
@@ -233,7 +205,7 @@ body::after{
 
 /* Hint */
 .hint{
-  font-size: 16px; /*12px;*/
+  font-size:12px;
   line-height:1.45;
   color:var(--muted);
 }
