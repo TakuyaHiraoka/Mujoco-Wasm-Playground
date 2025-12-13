@@ -1,59 +1,237 @@
-<!doctype html>
-<html lang="ja">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>MuJoCo WASM Piano (MIDI)</title>
-  <link rel="stylesheet" href="./style.css" />
+/* 
+  MuJoCo WASM Piano (MIDI) — Simple Christmas style
+  Drop this file as ./style.css (referenced by index.html)
+*/
 
-  <!-- three を bare import で使えるように -->
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-    }
+:root{
+  --bg0:#0b0f14;
+  --bg1:#0f1b2d;
+  --panel:rgba(12,16,22,.72);
+  --panel2:rgba(12,16,22,.52);
+  --text:#e9edf5;
+  --muted:rgba(233,237,245,.78);
+
+  --red:#e63946;
+  --green:#2ecc71;
+  --gold:#f4d35e;
+
+  --shadow:rgba(0,0,0,.38);
+  --radius:14px;
+  --gap:10px;
+}
+
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+body{
+  margin:0;
+  overflow:hidden;
+  color:var(--text);
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";
+
+  /* Festive but subtle background */
+  background:
+    radial-gradient(1100px 700px at 18% 8%, rgba(230,57,70,.18), transparent 60%),
+    radial-gradient(900px 600px at 82% 18%, rgba(46,204,113,.14), transparent 55%),
+    radial-gradient(700px 500px at 55% 0%, rgba(244,211,94,.10), transparent 60%),
+    linear-gradient(180deg, var(--bg1), var(--bg0));
+}
+
+/* Canvas fills the screen */
+#c{
+  position:fixed;
+  inset:0;
+  width:100vw;
+  height:100vh;
+  display:block;
+}
+
+/* Soft falling snow (CSS-only, lightweight) */
+body::before,
+body::after{
+  content:"";
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  background-image:
+    radial-gradient(2px 2px at 20px 30px, rgba(255,255,255,.75) 50%, transparent 51%),
+    radial-gradient(1px 1px at 120px 80px, rgba(255,255,255,.55) 50%, transparent 51%),
+    radial-gradient(1px 1px at 40px 160px, rgba(255,255,255,.45) 50%, transparent 51%),
+    radial-gradient(2px 2px at 180px 140px, rgba(255,255,255,.65) 50%, transparent 51%);
+  background-size:220px 220px;
+  opacity:.30;
+  animation:snow 14s linear infinite;
+  z-index:0;
+}
+body::after{
+  background-size:320px 320px;
+  opacity:.18;
+  animation-duration:22s;
+}
+@keyframes snow{
+  from{ background-position:0 0; }
+  to{ background-position:0 520px; }
+}
+
+/* UI panel */
+#ui{
+  position:fixed;
+  top:16px;
+  left:16px;
+  right:16px;
+  max-width:980px;
+  margin:0 auto;
+  padding:14px 16px;
+
+  background:var(--panel);
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:var(--radius);
+  box-shadow:0 14px 40px var(--shadow);
+  backdrop-filter:blur(10px);
+  -webkit-backdrop-filter:blur(10px);
+
+  z-index:10;
+}
+
+/* Subtle festive border glow */
+#ui::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  border-radius:inherit;
+  padding:1px;
+  background:linear-gradient(90deg, rgba(230,57,70,.65), rgba(244,211,94,.55), rgba(46,204,113,.55));
+  opacity:.32;
+  pointer-events:none;
+
+  /* hollow-out the center, keeping only the border */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+}
+
+/* Rows */
+.row{
+  display:flex;
+  align-items:center;
+  gap:var(--gap);
+  flex-wrap:wrap;
+}
+.row + .row{ margin-top:10px; }
+
+.title{
+  font-size:16px;
+  font-weight:700;
+  letter-spacing:.2px;
+  text-shadow:0 1px 0 rgba(0,0,0,.25);
+}
+
+/* Status pill */
+.status{
+  margin-left:auto;
+  font-size:12px;
+  padding:6px 10px;
+  border-radius:999px;
+  background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.12);
+  color:var(--muted);
+  font-variant-numeric:tabular-nums;
+}
+
+/* Controls layout */
+.controls{ align-items:center; }
+
+/* Buttons + file label as button */
+.btn,
+.filebtn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  padding:9px 12px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.06);
+  color:var(--text);
+  cursor:pointer;
+  user-select:none;
+  text-decoration:none;
+  transition:background .18s ease, border-color .18s ease, transform .06s ease;
+}
+.btn:hover,
+.filebtn:hover{
+  background:rgba(255,255,255,.10);
+  border-color:rgba(255,255,255,.22);
+}
+.btn:active,
+.filebtn:active{ transform:translateY(1px); }
+
+/* Hide the file input (label works as the button) */
+.filebtn input{ display:none; }
+
+/* Range control */
+.range{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:8px 10px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.03);
+  color:var(--muted);
+}
+.range input[type="range"]{
+  width:140px;
+  accent-color:var(--gold);
+}
+#speedValue{
+  min-width:54px;
+  text-align:right;
+  color:var(--muted);
+  font-variant-numeric:tabular-nums;
+}
+
+/* Checkbox pills */
+.chk{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 10px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.03);
+  color:var(--muted);
+}
+.chk input{ accent-color:var(--green); }
+
+/* Hint */
+.hint{
+  font-size:12px;
+  line-height:1.45;
+  color:var(--muted);
+}
+.hint b{ color:var(--text); }
+.hint a{ color:var(--gold); }
+
+/* Focus styles */
+.btn:focus-visible,
+.filebtn:focus-visible,
+.range input:focus-visible,
+.chk input:focus-visible{
+  outline:2px solid rgba(244,211,94,.85);
+  outline-offset:2px;
+}
+
+/* Small screens */
+@media (max-width: 640px){
+  #ui{
+    top:10px;
+    left:10px;
+    right:10px;
+    padding:12px;
   }
-  </script>
-
-  <!-- SoundFont（任意）: チェックON時だけ使う -->
-  <script src="https://cdn.jsdelivr.net/npm/soundfont-player@0.12.0/dist/soundfont-player.min.js"></script>
-</head>
-
-<body>
-  <div id="ui">
-    <div class="row">
-      <div class="title">MuJoCo WASM Piano (MIDI)</div>
-      <div id="status" class="status">Loading…</div>
-    </div>
-
-    <div class="row controls">
-      <label class="filebtn">
-        MIDIを選択
-        <input id="midiFile" type="file" accept=".mid,.midi" />
-      </label>
-
-      <button id="playPause" class="btn">▶︎ Play</button>
-      <button id="stop" class="btn">⏹ Stop</button>
-
-      <label class="range">
-        Speed
-        <input id="speed" type="range" min="0.25" max="2.0" step="0.05" value="1.0" />
-        <span id="speedValue">1.00x</span>
-      </label>
-
-      <label class="chk">
-        <input id="useSoundfont" type="checkbox" />
-        SoundFontピアノ（重め）
-      </label>
-    </div>
-
-    <div class="row hint">
-      ※ まずは適当な .mid を読み込んで Play。音と鍵盤が一致するはず。
-    </div>
-  </div>
-
-  <canvas id="c"></canvas>
-  <script type="module" src="./main.js"></script>
-</body>
-</html>
+  .status{
+    width:100%;
+    margin-left:0;
+  }
+  .range input[type="range"]{ width:110px; }
+}
