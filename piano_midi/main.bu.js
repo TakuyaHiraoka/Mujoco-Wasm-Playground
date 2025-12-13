@@ -423,8 +423,7 @@ UI.midiFile.addEventListener("change", async (e) => {
     events = buildEventsFromMidi(midi);
     songName = file.name;
     UI.status.textContent = `Loaded: ${songName} / events=${events.length}`;
-    // Autoplay immediately after loading a MIDI file
-    restartSong(true);
+    restartSong(false);
   } catch (err) {
     console.error(err);
     UI.status.textContent = `MIDI parse error: ${err?.message ?? err}`;
@@ -465,8 +464,7 @@ async function tryLoadDefaultMidi() {
     loadDemoScale();
     UI.status.textContent = `Ready (${songName})`;
   }
-  // Autoplay from the beginning on page load
-  restartSong(true);
+  restartSong(false);
 }
 
 await tryLoadDefaultMidi();
