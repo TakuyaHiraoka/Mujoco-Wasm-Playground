@@ -25,7 +25,7 @@ const KEY_HINGE_Y = KEYBOARD_DEPTH - 0.02;   // move hinge toward the back (0.22
 
 
 // Change this to set the default MIDI
-const DEFAULT_MIDI_URL = "./midis/Merry Christmas, Mr. Lawrence.mide";
+const DEFAULT_MIDI_URL = "./midis/Merry Christmas, Mr. Lawrence.mid";
 
 // --------------------
 // Three.js
