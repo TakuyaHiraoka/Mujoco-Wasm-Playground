@@ -456,7 +456,8 @@ async function tryLoadDefaultMidi() {
     const buf = await res.arrayBuffer();
     const midi = new Midi(buf);
     events = buildEventsFromMidi(midi);
-    songName = "default.mid";
+    //songName = "default.mid";
+    songName = decodeURIComponent(new URL(DEFAULT_MIDI_URL, location.href).pathname.split("/").pop() || "default.mid");
     UI.status.textContent = `Loaded default: ${songName} / events=${events.length}`;
   } catch {
     // If missing, fall back to the demo
