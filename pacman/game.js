@@ -31,7 +31,6 @@ async function loadMujocoFromGlobal() {
     );
   }
 
-  // Pick the first function-like candidate.
   const loader = candidates.find((x) => typeof x === "function");
   if (!loader) {
     throw new Error(
@@ -40,18 +39,27 @@ async function loadMujocoFromGlobal() {
     );
   }
 
-  // The loader typically returns a Promise that resolves to the mujoco module object.
   return await loader();
 }
-
 
 // -----------------------------
 // Game configuration
 // -----------------------------
 const CELL = 1.0;                 // Grid cell size in MuJoCo world units
-const PAC_SPEED = 40.0;            // Desired velocity in world units/sec
-const GHOST_SPEED = 32.0;          // Ghost speed
-const SNAP_EPS = 0.10;            // How close to a cell center to allow turning/snapping
+
+// Desired moving speed (world units / sec).
+// NOTE: We use motor actuators (force), so we implement our own velocity-servo in JS.
+const PAC_SPEED = 4.0;
+const GHOST_SPEED = 3.2;
+
+// Max actuator force (because we use <motor> actuators).
+const PAC_MAX_FORCE = 80.0;
+const GHOST_MAX_FORCE = 60.0;
+
+// Velocity servo gain: force = KP * (v_des - v_current)
+const VEL_SERVO_KP = 60.0;
+
+const SNAP_EPS = 0.10;            // How close to a cell center to allow turning (no snapping position)
 const AI_UPDATE_SEC = 0.25;       // Ghost path update interval
 const SIM_TIMESTEP = 0.01;        // MuJoCo timestep set in MJCF
 
@@ -111,6 +119,13 @@ const elTotal = document.getElementById("total");
 const elStatus = document.getElementById("status");
 
 // -----------------------------
+// Utility
+// -----------------------------
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+// -----------------------------
 // Map parsing helpers
 // -----------------------------
 function mapDims() {
@@ -152,7 +167,7 @@ function cellKey(col, rowTop) {
   return `${col},${rowTop}`;
 }
 
-// "Near center" check: helps with grid-accurate turning and snapping.
+// "Near center" check: helps with grid-accurate turning.
 function nearCellCenter(x, y, col, rowTop, W, H) {
   const c = cellToWorldCenter(col, rowTop, W, H);
   const dx = x - c.x;
@@ -240,7 +255,6 @@ function dirFromCells(a, b) {
 // -----------------------------
 function buildMJCF({ walls, W, H }) {
   // Wall geometry: one box per wall cell.
-  // For a more optimized model you would merge wall segments, but this is fine for small maps.
   const wallHalf = 0.50 * CELL;
   const wallHalfH = 0.35;
   const wallZ = wallHalfH;
@@ -262,8 +276,8 @@ function buildMJCF({ walls, W, H }) {
     }
   }
 
-  // We keep gravity = 0 and constrain motion to x/y using slide joints.
-  // qpos coordinates directly correspond to world x/y, because parent body is at (0,0,z).
+  // Use motors (force actuators) and do velocity servo in JS.
+  // Also make spheres light so they respond quickly.
   return `<?xml version="1.0" encoding="utf-8"?>
 <mujoco model="pacman_mini">
   <option timestep="${SIM_TIMESTEP}" gravity="0 0 0" integrator="Euler" />
@@ -274,7 +288,7 @@ function buildMJCF({ walls, W, H }) {
           friction="1 0.01 0.001"
           solref="0.02 1"
           solimp="0.95 0.95 0.01" />
-    <joint damping="2" />
+    <joint damping="1" />
   </default>
 
   <worldbody>
@@ -283,22 +297,21 @@ function buildMJCF({ walls, W, H }) {
     <body name="pacman" pos="0 0 0.30">
       <joint name="pacman_x" type="slide" axis="1 0 0" limited="true" range="${xMin} ${xMax}" />
       <joint name="pacman_y" type="slide" axis="0 1 0" limited="true" range="${yMin} ${yMax}" />
-      <geom name="pacman_geom" type="sphere" size="${PAC_RADIUS}" rgba="1 0.95 0.10 1" />
+      <geom name="pacman_geom" type="sphere" size="${PAC_RADIUS}" rgba="1 0.95 0.10 1" density="10" />
     </body>
 
     <body name="ghost" pos="0 0 0.30">
       <joint name="ghost_x" type="slide" axis="1 0 0" limited="true" range="${xMin} ${xMax}" />
       <joint name="ghost_y" type="slide" axis="0 1 0" limited="true" range="${yMin} ${yMax}" />
-      <geom name="ghost_geom" type="sphere" size="${GHOST_RADIUS}" rgba="1 0.20 0.20 1" />
+      <geom name="ghost_geom" type="sphere" size="${GHOST_RADIUS}" rgba="1 0.20 0.20 1" density="10" />
     </body>
   </worldbody>
 
   <actuator>
-    <!-- Replace velocity actuators with motors (force-based) -->
-    <motor name="pacman_x_motor" joint="pacman_x" gear="1 0 0 0 0 0" ctrlrange="-${PAC_SPEED} ${PAC_SPEED}" />
-    <motor name="pacman_y_motor" joint="pacman_y" gear="0 1 0 0 0 0" ctrlrange="-${PAC_SPEED} ${PAC_SPEED}" />
-    <motor name="ghost_x_motor"  joint="ghost_x"  gear="1 0 0 0 0 0" ctrlrange="-${GHOST_SPEED} ${GHOST_SPEED}" />
-    <motor name="ghost_y_motor"  joint="ghost_y"  gear="0 1 0 0 0 0" ctrlrange="-${GHOST_SPEED} ${GHOST_SPEED}" />
+    <motor name="pacman_x_motor" joint="pacman_x" gear="1" ctrlrange="-${PAC_MAX_FORCE} ${PAC_MAX_FORCE}" />
+    <motor name="pacman_y_motor" joint="pacman_y" gear="1" ctrlrange="-${PAC_MAX_FORCE} ${PAC_MAX_FORCE}" />
+    <motor name="ghost_x_motor"  joint="ghost_x"  gear="1" ctrlrange="-${GHOST_MAX_FORCE} ${GHOST_MAX_FORCE}" />
+    <motor name="ghost_y_motor"  joint="ghost_y"  gear="1" ctrlrange="-${GHOST_MAX_FORCE} ${GHOST_MAX_FORCE}" />
   </actuator>
 </mujoco>`;
 }
@@ -367,9 +380,7 @@ function setupWorldToCanvas(W, H) {
 async function main() {
   assertRectangular();
   resizeCanvas();
-  window.addEventListener("resize", () => {
-    resizeCanvas();
-  });
+  window.addEventListener("resize", () => resizeCanvas());
 
   // Parse map
   const { W, H } = mapDims();
@@ -405,7 +416,6 @@ async function main() {
   const mujoco = await loadMujocoFromGlobal();
 
   // Virtual file system setup + model load
-  // (This is the standard workflow: create a working dir, write XML, then load model from that path.)
   mujoco.FS.mkdir("/working");
   mujoco.FS.mount(mujoco.MEMFS, { root: "." }, "/working");
 
@@ -415,15 +425,13 @@ async function main() {
   const model = mujoco.MjModel.loadFromXML("/working/pacman.xml");
   const data = new mujoco.MjData(model);
 
-  // Joint / actuator indices:
-  // We rely on the XML order:
-  //   qpos[0]=pacman_x, qpos[1]=pacman_y, qpos[2]=ghost_x, qpos[3]=ghost_y
-  //   ctrl[0..3] correspond to the 4 velocity actuators in that order.
+  // Joint / actuator indices rely on XML order:
+  // qpos: pacman_x, pacman_y, ghost_x, ghost_y
+  // ctrl: pacman_x_motor, pacman_y_motor, ghost_x_motor, ghost_y_motor
   const PAC_X = 0, PAC_Y = 1, GHOST_X = 2, GHOST_Y = 3;
   const PAC_CTRL_X = 0, PAC_CTRL_Y = 1, GHOST_CTRL_X = 2, GHOST_CTRL_Y = 3;
 
   function resetGameState() {
-    // Reset physics state
     mujoco.mj_resetData(model, data);
 
     const p0 = cellToWorldCenter(pacSpawn.col, pacSpawn.rowTop, W, H);
@@ -444,13 +452,9 @@ async function main() {
     data.ctrl[GHOST_CTRL_X] = 0;
     data.ctrl[GHOST_CTRL_Y] = 0;
 
-    // Recompute derived quantities
     mujoco.mj_forward(model, data);
 
-    // Reset pellets
-    for (const p of pellets.values()) {
-      p.eaten = false;
-    }
+    for (const p of pellets.values()) p.eaten = false;
 
     score = 0;
     elScore.textContent = "0";
@@ -483,8 +487,6 @@ async function main() {
   window.addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
 
-    elStatus.textContent = `Key: ${k}`;
-
     if (k === "r") {
       resetGameState();
       return;
@@ -495,24 +497,17 @@ async function main() {
       return;
     }
 
-    // Movement keys
     if (k === "arrowup" || k === "w") requestedDir = DIRS.up;
     else if (k === "arrowdown" || k === "s") requestedDir = DIRS.down;
     else if (k === "arrowleft" || k === "a") requestedDir = DIRS.left;
     else if (k === "arrowright" || k === "d") requestedDir = DIRS.right;
   });
 
-  // Initialize
   resetGameState();
 
   // Simulation loop with fixed-step accumulator
   let last = performance.now();
   let acc = 0;
-
-  function isWallCell(col, rowTop) {
-    if (!inBounds(col, rowTop, W, H)) return true;
-    return walls[rowTop][col];
-  }
 
   function canMoveFromCell(cell, dir) {
     if (dir === DIRS.none) return true;
@@ -521,29 +516,12 @@ async function main() {
     return !walls[n.rowTop][n.col];
   }
 
-
-  function snapBodyToCenterIfClose(bodyXIdx, bodyYIdx) {
-    // Don't snap while moving fast; otherwise the character gets "stuck"
-    // because each simulation step moves less than SNAP_EPS.
-    const vx = data.qvel[bodyXIdx];
-    const vy = data.qvel[bodyYIdx];
-    if (Math.hypot(vx, vy) > 0.5) return;
-
-    const x = data.qpos[bodyXIdx];
-    const y = data.qpos[bodyYIdx];
-    const cell = worldToCell(x, y, W, H);
-    if (!inBounds(cell.col, cell.rowTop, W, H)) return;
-
-    if (nearCellCenter(x, y, cell.col, cell.rowTop, W, H)) {
-      const c = cellToWorldCenter(cell.col, cell.rowTop, W, H);
-      data.qpos[bodyXIdx] = c.x;
-      data.qpos[bodyYIdx] = c.y;
-      data.qvel[bodyXIdx] = 0;
-      data.qvel[bodyYIdx] = 0;
-    }
+  function setVelocityServo(ctrlXIdx, ctrlYIdx, qvelXIdx, qvelYIdx, vDesX, vDesY, maxForce) {
+    const fx = VEL_SERVO_KP * (vDesX - data.qvel[qvelXIdx]);
+    const fy = VEL_SERVO_KP * (vDesY - data.qvel[qvelYIdx]);
+    data.ctrl[ctrlXIdx] = clamp(fx, -maxForce, maxForce);
+    data.ctrl[ctrlYIdx] = clamp(fy, -maxForce, maxForce);
   }
-
-
 
   function updatePacmanControls() {
     const x = data.qpos[PAC_X];
@@ -552,34 +530,27 @@ async function main() {
 
     if (!inBounds(cell.col, cell.rowTop, W, H)) {
       pacDir = DIRS.none;
-      data.ctrl[PAC_CTRL_X] = 0;
-      data.ctrl[PAC_CTRL_Y] = 0;
+      setVelocityServo(PAC_CTRL_X, PAC_CTRL_Y, PAC_X, PAC_Y, 0, 0, PAC_MAX_FORCE);
       return;
     }
 
     const atCenter = nearCellCenter(x, y, cell.col, cell.rowTop, W, H);
 
     if (atCenter) {
-      // Snap to center to keep motion grid-accurate.
-      snapBodyToCenterIfClose(PAC_X, PAC_Y);
-
       // Turn if requested direction is possible.
       if (requestedDir !== DIRS.none && canMoveFromCell(cell, requestedDir)) {
         pacDir = requestedDir;
       }
 
-      // Stop if current direction is blocked.
+      // Stop if current direction is blocked (according to grid).
       if (!canMoveFromCell(cell, pacDir)) {
         pacDir = DIRS.none;
       }
-
-      elStatus.textContent = `ctrl=(${data.ctrl[0].toFixed(2)}, ${data.ctrl[1].toFixed(2)})`;
-
     }
 
-    // Apply desired velocities via MuJoCo velocity actuators.
-    data.ctrl[PAC_CTRL_X] = pacDir.dx * PAC_SPEED;
-    data.ctrl[PAC_CTRL_Y] = pacDir.dy * PAC_SPEED;
+    const vDesX = pacDir.dx * PAC_SPEED;
+    const vDesY = pacDir.dy * PAC_SPEED;
+    setVelocityServo(PAC_CTRL_X, PAC_CTRL_Y, PAC_X, PAC_Y, vDesX, vDesY, PAC_MAX_FORCE);
   }
 
   function updateGhostAI(dtSec) {
@@ -611,22 +582,20 @@ async function main() {
 
     if (!inBounds(cell.col, cell.rowTop, W, H)) {
       ghostDir = DIRS.none;
-      data.ctrl[GHOST_CTRL_X] = 0;
-      data.ctrl[GHOST_CTRL_Y] = 0;
+      setVelocityServo(GHOST_CTRL_X, GHOST_CTRL_Y, GHOST_X, GHOST_Y, 0, 0, GHOST_MAX_FORCE);
       return;
     }
 
     const atCenter = nearCellCenter(x, y, cell.col, cell.rowTop, W, H);
     if (atCenter) {
-      snapBodyToCenterIfClose(GHOST_X, GHOST_Y);
-
       if (!canMoveFromCell(cell, ghostDir)) {
         ghostDir = DIRS.none;
       }
     }
 
-    data.ctrl[GHOST_CTRL_X] = ghostDir.dx * GHOST_SPEED;
-    data.ctrl[GHOST_CTRL_Y] = ghostDir.dy * GHOST_SPEED;
+    const vDesX = ghostDir.dx * GHOST_SPEED;
+    const vDesY = ghostDir.dy * GHOST_SPEED;
+    setVelocityServo(GHOST_CTRL_X, GHOST_CTRL_Y, GHOST_X, GHOST_Y, vDesX, vDesY, GHOST_MAX_FORCE);
   }
 
   function handlePelletsAndWin() {
@@ -664,7 +633,6 @@ async function main() {
   }
 
   function render(tSec) {
-    // Canvas uses CSS pixels, not device pixels (we setTransform with dpr).
     ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
     ctx.fillStyle = COLORS.bg;
     ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
@@ -677,22 +645,15 @@ async function main() {
       for (let col = 0; col < W; col++) {
         if (!walls[rowTop][col]) continue;
 
-        // Cell bounds in world coordinates:
         const left = col * CELL;
-        const topWorldY = (H - rowTop) * CELL; // top edge in world (y up)
+        const topWorldY = (H - rowTop) * CELL;
         const right = left + CELL;
         const bottomWorldY = topWorldY - CELL;
 
-        // Convert (left, top) and (right, bottom) to canvas.
         const a = worldToCanvas(left, topWorldY);
         const b = worldToCanvas(right, bottomWorldY);
 
-        const x = a.x;
-        const y = a.y;
-        const w = (b.x - a.x);
-        const h = (b.y - a.y);
-
-        ctx.fillRect(x, y, w, h);
+        ctx.fillRect(a.x, a.y, (b.x - a.x), (b.y - a.y));
       }
     }
 
@@ -705,8 +666,8 @@ async function main() {
     }
 
     // Draw pacman and ghost
-    const pacCanvas = worldToCanvas(data.qpos[0], data.qpos[1]);
-    const ghostCanvas = worldToCanvas(data.qpos[2], data.qpos[3]);
+    const pacCanvas = worldToCanvas(data.qpos[PAC_X], data.qpos[PAC_Y]);
+    const ghostCanvas = worldToCanvas(data.qpos[GHOST_X], data.qpos[GHOST_Y]);
 
     drawPacman(
       pacCanvas.x,
@@ -719,7 +680,7 @@ async function main() {
 
     drawCircle(ghostCanvas.x, ghostCanvas.y, GHOST_RADIUS * scale, COLORS.ghost);
 
-    // Optional: draw a thin border around the maze
+    // Optional border
     ctx.strokeStyle = "rgba(255,255,255,0.25)";
     ctx.lineWidth = 1;
     ctx.strokeRect(offsetX, offsetY, worldW * scale, worldH * scale);
@@ -731,27 +692,19 @@ async function main() {
     acc += dt;
 
     if (!paused && !gameOver && !win) {
-      // Fixed-step simulation
       while (acc >= SIM_TIMESTEP) {
-        // Update controls and AI before each physics step
         updateGhostAI(SIM_TIMESTEP);
         updatePacmanControls();
         updateGhostControls();
 
         mujoco.mj_step(model, data);
 
-        // Game logic
         handlePelletsAndWin();
         handleGhostCollision();
-
-        // Keep bodies aligned to cell centers when close (reduces drift)
-        snapBodyToCenterIfClose(PAC_X, PAC_Y);
-        snapBodyToCenterIfClose(GHOST_X, GHOST_Y);
 
         acc -= SIM_TIMESTEP;
 
         if (gameOver || win) {
-          // Stop motion immediately after terminal state.
           data.ctrl[PAC_CTRL_X] = 0;
           data.ctrl[PAC_CTRL_Y] = 0;
           data.ctrl[GHOST_CTRL_X] = 0;
