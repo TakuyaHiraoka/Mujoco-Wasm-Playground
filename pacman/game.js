@@ -57,7 +57,7 @@ const PAC_MAX_FORCE = 80.0;
 const GHOST_MAX_FORCE = 60.0;
 
 // Velocity servo gain: force = KP * (v_des - v_current)
-const VEL_SERVO_KP = 60.0;
+const VEL_SERVO_KP = 20.0; // 60.0;
 
 const SNAP_EPS = 0.10;            // How close to a cell center to allow turning (no snapping position)
 const AI_UPDATE_SEC = 0.25;       // Ghost path update interval
