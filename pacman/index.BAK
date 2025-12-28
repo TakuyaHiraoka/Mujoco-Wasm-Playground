@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>MuJoCo WASM Pac-Man-ish</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    #game {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      image-rendering: pixelated;
+    }
+    #hud {
+      position: fixed;
+      left: 12px;
+      top: 12px;
+      padding: 10px 12px;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 10px;
+      max-width: min(520px, calc(100vw - 24px));
+      line-height: 1.35;
+      user-select: none;
+    }
+    #hud b { font-weight: 650; }
+    #status {
+      margin-top: 6px;
+      opacity: 0.9;
+    }
+    #small {
+      margin-top: 6px;
+      font-size: 12px;
+      opacity: 0.85;
+    }
+    a { color: #8fd3ff; }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div><b>MuJoCo WASM Pac-Man-ish (mini)</b></div>
+    <div>Move: Arrow keys / WASD · Pause: Space · Restart: R</div>
+    <div>Score: <span id="score">0</span> / <span id="total">0</span></div>
+    <div id="status">Loading MuJoCo…</div>
+    <div id="small">
+      Physics: MuJoCo (collision) · Render: Canvas 2D (top-down)
+    </div>
+  </div>
+
+  <script type="module" src="./game.js"></script>
+</body>
+</html>
