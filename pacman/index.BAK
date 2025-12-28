@@ -57,6 +57,11 @@
     </div>
   </div>
 
+  <!-- Load MuJoCo WASM bundle from CDN (global build) -->
+  <script src="https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js"></script>
+
+  <!-- Then load our game code -->
   <script type="module" src="./game.js"></script>
+
 </body>
 </html>
