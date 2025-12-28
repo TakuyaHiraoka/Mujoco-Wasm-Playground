@@ -572,6 +572,9 @@ async function main() {
       if (!canMoveFromCell(cell, pacDir)) {
         pacDir = DIRS.none;
       }
+
+      elStatus.textContent = `ctrl=(${data.ctrl[0].toFixed(2)}, ${data.ctrl[1].toFixed(2)})`;
+
     }
 
     // Apply desired velocities via MuJoCo velocity actuators.
