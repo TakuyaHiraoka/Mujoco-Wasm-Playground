@@ -34,6 +34,7 @@ const btnDiagClose = document.getElementById("btnDiagClose");
 const btnTestBasic = document.getElementById("btnTestBasic");
 const btnTestInk = document.getElementById("btnTestInk");
 const btnTestPath = document.getElementById("btnTestPath");
+const btnTestEdge = document.getElementById("btnTestEdge");
 const btnClearLog = document.getElementById("btnClearLog");
 const btnCopyLog = document.getElementById("btnCopyLog");
 const diagLog = document.getElementById("diagLog");
@@ -132,8 +133,8 @@ let mujoco = null;
 let model = null;
 let data = null;
 
-/** @type {Array<{lo:number,hi:number}>} */
-let hingeRanges = [];
+// Note: hinge joints are configured as *unlimited* in the XML.
+// We still keep angles numerically bounded by wrapping to (-pi, pi] after each update.
 
 const PEN_SITE_NAME = "pen_tip_site";
 let penSiteId = -1;
@@ -350,13 +351,19 @@ btnCopyLog?.addEventListener("click", () => diagCopyToClipboard());
 btnTestBasic?.addEventListener("click", () => runSelfTestBasic());
 btnTestInk?.addEventListener("click", () => addTestInk());
 btnTestPath?.addEventListener("click", () => runSelfTestPath());
+btnTestEdge?.addEventListener("click", () => runSelfTestEdge());
 
 // =============================
 // Pointer input on draw canvas
 // =============================
 function getPointerPosCss(e) {
   const rect = drawCanvas.getBoundingClientRect();
-  return { px: e.clientX - rect.left, py: e.clientY - rect.top };
+  // When pointer capture is active, pointer events keep firing even if the pointer
+  // leaves the canvas. Clamp to the visible canvas bounds to avoid targets outside
+  // the workspace (a common cause of confusing "stuck" behavior near edges).
+  const px = clamp(e.clientX - rect.left, 0, rect.width);
+  const py = clamp(e.clientY - rect.top, 0, rect.height);
+  return { px, py };
 }
 
 function resampleSegment(a, b, step) {
@@ -784,20 +791,22 @@ function recordExecutedPoint(penWorld, penIsDown) {
 function stepOnce() {
   if (!model || !data) return;
 
-  const cmd = commandQueue.length > 0 ? commandQueue[0] : null;
-  const penDesired = cmd && cmd.penDown ? PEN_DOWN : PEN_UP;
+  // Head command (drop any unreachable points defensively).
+  let cmd = commandQueue.length > 0 ? commandQueue[0] : null;
 
   // IK target
   let qTarget = null;
-  if (cmd) {
+  while (cmd) {
     let { x, y } = clampToReach(cmd.x, cmd.y);
     qTarget = pickIKSolution(x, y);
-    if (!qTarget) {
-      // unreachable (should be rare with clamp) -> drop
-      commandQueue.shift();
-      qTarget = null;
-    }
+    if (qTarget) break;
+    // unreachable -> drop and try next
+    commandQueue.shift();
+    cmd = commandQueue.length > 0 ? commandQueue[0] : null;
   }
+
+  const penDesired = cmd && cmd.penDown ? PEN_DOWN : PEN_UP;
+
   if (!qTarget) qTarget = [data.qpos[0], data.qpos[1], data.qpos[2]];
 
   const simDt = model.opt.timestep || 0.002;
@@ -807,12 +816,9 @@ function stepOnce() {
   for (let i = 0; i < 3; i++) {
     const diff = angleDiff(qTarget[i], data.qpos[i]);
     const dq = clamp(diff, -maxDq, maxDq);
-    let q = data.qpos[i] + dq;
-    // Clamp to the MuJoCo joint range to avoid wrap-around jumps near ±pi.
-    if (hingeRanges && hingeRanges[i]) {
-      q = clamp(q, hingeRanges[i].lo, hingeRanges[i].hi);
-    }
-    data.qpos[i] = q;
+    // Hinges are unlimited in the model, so we can safely wrap the representation
+    // to keep numbers small without introducing a hard boundary stall at ±pi.
+    data.qpos[i] = wrapToPi(data.qpos[i] + dq);
   }
 
   const maxDp = PEN_MAX_RATE * simDt;
@@ -1057,6 +1063,93 @@ async function runSelfTestPath() {
   }
 }
 
+// Reproduces the "left edge" scenario: very small X requires a strongly folded posture.
+// This test verifies that the arm does NOT stall when joint angles approach ±pi.
+async function runSelfTestEdge() {
+  setDiagVisible(true);
+  diagClear();
+  diagLine("== Edge follow test (left border) ==");
+
+  if (!mujoco || !model || !data) {
+    diagLine("❌ MuJoCo/model not loaded yet.");
+    return;
+  }
+
+  // Clear current strokes/ink/queue.
+  targetStrokes = [];
+  executedStrokes = [];
+  commandQueue = [];
+  clearInk3D();
+  lastWorldInStroke = null;
+
+  // Home pose
+  data.qpos[0] = 0.0;
+  data.qpos[1] = 0.8;
+  data.qpos[2] = -0.8;
+  data.qpos[3] = PEN_UP;
+  mujoco.mj_forward(model, data);
+  computeCanvasPlaneFromModel();
+
+  // Build a vertical line near the left boundary of the workspace.
+  // Use a small margin on Y to avoid touching the very edge of the canvas box.
+  const x = workspace.xMin;
+  const y0 = workspace.yMin + 0.01;
+  const y1 = workspace.yMax - 0.01;
+  const ptsW = [
+    { x, y: y0 },
+    { x, y: y1 },
+    { x, y: y0 },
+  ];
+
+  // Target overlay stroke
+  targetStrokes.push(
+    ptsW.map((p) => {
+      const c = worldToCanvasCss(p.x, p.y);
+      return { x: c.px, y: c.py };
+    })
+  );
+
+  // Queue: move to start, pen-down, then follow the line.
+  const p0 = ptsW[0];
+  commandQueue.push({ x: p0.x, y: p0.y, penDown: false });
+  commandQueue.push({ x: p0.x, y: p0.y, penDown: true });
+  for (let i = 0; i < ptsW.length - 1; i++) {
+    const seg = resampleSegment(ptsW[i], ptsW[i + 1], PATH_STEP);
+    for (const p of seg) commandQueue.push({ x: p.x, y: p.y, penDown: true });
+  }
+  const plast = ptsW[ptsW.length - 1];
+  commandQueue.push({ x: plast.x, y: plast.y, penDown: false });
+
+  // Simulate up to 6 seconds.
+  const simDt = model.opt.timestep || 0.002;
+  const maxSteps = Math.floor(6.0 / simDt);
+  const qmin = [Infinity, Infinity, Infinity];
+  const qmax = [-Infinity, -Infinity, -Infinity];
+
+  for (let i = 0; i < maxSteps; i++) {
+    stepOnce();
+    for (let j = 0; j < 3; j++) {
+      qmin[j] = Math.min(qmin[j], data.qpos[j]);
+      qmax[j] = Math.max(qmax[j], data.qpos[j]);
+    }
+    if (i % 250 === 0) await new Promise((r) => setTimeout(r, 0));
+    if (commandQueue.length === 0) break;
+  }
+
+  diagLine(`queueRemaining=${commandQueue.length}`);
+  diagLine(`executedStrokes=${executedStrokes.length}`);
+  diagLine(`inkCount=${inkCount}`);
+  diagLine(
+    `qpos ranges: q1=[${qmin[0].toFixed(3)},${qmax[0].toFixed(3)}] q2=[${qmin[1].toFixed(3)},${qmax[1].toFixed(3)}] q3=[${qmin[2].toFixed(3)},${qmax[2].toFixed(3)}]`
+  );
+
+  if (commandQueue.length === 0 && executedStrokes.length > 0 && inkCount > 0) {
+    diagLine("✅ Edge test OK (no stall near ±pi)");
+  } else {
+    diagLine("❌ Edge test failed: queue did not drain or ink was not produced");
+  }
+}
+
 // =============================
 // Boot
 // =============================
@@ -1076,12 +1169,7 @@ async function boot() {
     model = mujoco.MjModel.loadFromXML("/working/arm_pen.xml");
     data = new mujoco.MjData(model);
 
-    // Cache hinge joint ranges for kinematic clamping.
-    hingeRanges = [
-      { lo: model.jnt_range[0], hi: model.jnt_range[1] },
-      { lo: model.jnt_range[2], hi: model.jnt_range[3] },
-      { lo: model.jnt_range[4], hi: model.jnt_range[5] },
-    ];
+    // Hinges are configured as unlimited in the XML, so we don't need range clamping here.
 
     // Resolve pen site ID (fallback to 0 if lookup fails)
     penSiteId = lookupSiteIdByName(PEN_SITE_NAME);

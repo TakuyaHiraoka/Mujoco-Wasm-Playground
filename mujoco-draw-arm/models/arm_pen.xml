@@ -36,20 +36,18 @@
       <geom name="base_geom" type="cylinder" size="0.03 0.02" rgba="0.30 0.30 0.30 1"/>
 
       <body name="link1" pos="0 0 0">
-        <joint name="shoulder" type="hinge" axis="0 0 1"
-               limited="true" range="-3.1416 3.1416"/>
+        <!-- Unlimited hinge: avoids the ±pi boundary stall when targets require folded postures. -->
+        <joint name="shoulder" type="hinge" axis="0 0 1" limited="false"/>
         <geom name="link1_geom" type="capsule" fromto="0 0 0 0.20 0 0"
               size="0.018" rgba="0.90 0.20 0.20 1"/>
 
         <body name="link2" pos="0.20 0 0">
-          <joint name="elbow" type="hinge" axis="0 0 1"
-                 limited="true" range="-3.1416 3.1416"/>
+          <joint name="elbow" type="hinge" axis="0 0 1" limited="false"/>
           <geom name="link2_geom" type="capsule" fromto="0 0 0 0.20 0 0"
                 size="0.016" rgba="0.20 0.90 0.20 1"/>
 
           <body name="link3" pos="0.20 0 0">
-            <joint name="wrist" type="hinge" axis="0 0 1" damping="0.6"
-                   limited="true" range="-3.1416 3.1416"/>
+            <joint name="wrist" type="hinge" axis="0 0 1" damping="0.6" limited="false"/>
             <geom name="link3_geom" type="capsule" fromto="0 0 0 0.06 0 0"
                   size="0.014" rgba="0.20 0.20 0.90 1"/>
 
