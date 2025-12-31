@@ -163,6 +163,28 @@ async function runBasicTests(app, outEl) {
     const ctrl = Array.from(app.data.ctrl || []).slice(0, 8).map((v) => fmt(v,4)).join(", ");
     return `qpos=[${qpos}]\nqvel=[${qvel}]\nctrl=[${ctrl}]`;
   });
+
+  await runOne(outEl, "State sanity (not exploded)", async () => {
+    const qpos = app.data.qpos;
+    const qvel = app.data.qvel;
+    let maxQ = 0, maxV = 0;
+    for (let i = 0; i < Math.min(qpos.length, 4); i++) {
+      if (!Number.isFinite(qpos[i])) throw new Error("qpos contains non-finite values");
+      maxQ = Math.max(maxQ, Math.abs(qpos[i]));
+    }
+    if (qvel) {
+      for (let i = 0; i < Math.min(qvel.length, 4); i++) {
+        if (!Number.isFinite(qvel[i])) throw new Error("qvel contains non-finite values");
+        maxV = Math.max(maxV, Math.abs(qvel[i]));
+      }
+    }
+    if (maxQ > 50 || maxV > 1e5) {
+      throw new Error(
+        `state looks exploded (max|qpos|=${maxQ.toFixed(2)}, max|qvel|=${maxV.toFixed(2)}). Try Reset or switch Control=Kinematic.`
+      );
+    }
+    return `max|qpos|=${maxQ.toFixed(4)}, max|qvel|=${maxV.toFixed(4)}  (controlMode=${app.controlMode ?? "?"})`;
+  });
   await runOne(outEl, "Model option snapshot (timestep/gravity/disableflags)", async () => {
     const opt = app.model?.opt;
     if (!opt) return "model.opt not available";
@@ -305,6 +327,7 @@ async function runFullTests(app, outEl) {
 
   const backup = {
     paused: app.isPaused?.() ?? false,
+    controlMode: app.controlMode ?? null,
     qpos: data.qpos.slice(),
     qvel: data.qvel ? data.qvel.slice() : null,
     ctrl: data.ctrl ? data.ctrl.slice() : null,
@@ -316,6 +339,7 @@ async function runFullTests(app, outEl) {
   const restore = () => {
     try {
       app.setPaused?.(backup.paused);
+      if (backup.controlMode && app.setControlMode) app.setControlMode(backup.controlMode);
       for (let i = 0; i < backup.qpos.length; i++) data.qpos[i] = backup.qpos[i];
       if (backup.qvel && data.qvel) for (let i = 0; i < backup.qvel.length; i++) data.qvel[i] = backup.qvel[i];
       if (backup.ctrl && data.ctrl) for (let i = 0; i < backup.ctrl.length; i++) data.ctrl[i] = backup.ctrl[i];
@@ -331,7 +355,10 @@ async function runFullTests(app, outEl) {
   app.setPaused?.(true);
 
   try {
-    await runOne(outEl, "Actuator mapping sanity (ctrl[i] affects some qpos)", async () => {
+    await runOne(outEl, "Actuator mapping sanity (dynamic mode only)", async () => {
+      if ((app.controlMode || "").toLowerCase() !== "dynamic") {
+        return `skip (controlMode=${app.controlMode ?? "?"})`;
+      }
       const nu = model.nu ?? 0;
       if (!nu || !data.ctrl) return "no actuators/ctrl available; skip";
 
@@ -401,6 +428,10 @@ async function runFullTests(app, outEl) {
     });
 
     await runOne(outEl, "Mini path follow (square, 2s sim) - queue should drain", async () => {
+      // Force stable mode for determinism
+      if (app.setControlMode) app.setControlMode("kinematic");
+      if (app.resetSimHome) app.resetSimHome({ clearQueue: true });
+
       // Build a tiny square in reachable region
       const ws = app.workspace;
       const x0 = (ws.xMin + ws.xMax) * 0.5;
@@ -437,7 +468,11 @@ async function runFullTests(app, outEl) {
       const qlen = (app.commandQueue || []).length;
       const p = app.getPenWorld();
       const err = Math.hypot(p.x - pts[pts.length - 1].x, p.y - pts[pts.length - 1].y);
-      return `queueRemaining=${qlen}, finalErr≈${fmt(err,4)}  (executedStrokes=${(app.executedStrokes||[]).length})`;
+      const execN = (app.executedStrokes||[]).length;
+      if (qlen > 1 || err > 0.06 || execN === 0) {
+        throw new Error(`follow failed: queueRemaining=${qlen}, finalErr≈${fmt(err,4)}, executedStrokes=${execN}`);
+      }
+      return `queueRemaining=${qlen}, finalErr≈${fmt(err,4)}  (executedStrokes=${execN}, controlMode=${app.controlMode ?? "?"})`;
     });
   } finally {
     restore();

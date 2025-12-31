@@ -1,6 +1,11 @@
 <mujoco model="draw_arm">
   <compiler angle="radian" coordinate="local" inertiafromgeom="true"/>
-  <option timestep="0.002" gravity="0 0 -9.81" integrator="RK4"/>
+  <!--
+    NOTE:
+    RK4 は剛性の高いアクチュエータと組み合わさるとブラウザ環境で不安定化しやすいことがあります。
+    ここでは安定性優先で Euler を採用します。
+  -->
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="Euler"/>
   <size njmax="2000" nconmax="2000"/>
 
   <asset>

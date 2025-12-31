@@ -72,6 +72,27 @@ button:hover {
   user-select: none;
 }
 
+.select {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+  user-select: none;
+}
+
+select {
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+select:hover {
+  background: var(--btnHover);
+}
+
 .toggle input {
   transform: scale(1.1);
   accent-color: var(--accent);

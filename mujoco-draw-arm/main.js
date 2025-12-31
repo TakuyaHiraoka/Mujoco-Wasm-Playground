@@ -12,10 +12,13 @@ const statusEl = document.getElementById("status");
 
 const btnClear = document.getElementById("btnClear");
 const btnHome = document.getElementById("btnHome");
+const btnReset = document.getElementById("btnReset");
 
 const chkFollow = document.getElementById("chkFollow");
 const chkShowTarget = document.getElementById("chkShowTarget");
 const chkShowExec = document.getElementById("chkShowExec");
+
+const selControlMode = document.getElementById("selControlMode");
 
 // 2D canvas context (CSSピクセルで描くために dpr を吸収する)
 const ctx2d = drawCanvas.getContext("2d");
@@ -73,6 +76,12 @@ let currentStrokeCmds = []; // followWhileDrawing=false のときに溜めて、
 let followWhileDrawing = true;
 let showTarget = true;
 let showExecuted = true;
+
+// Control mode:
+// - kinematic: directly sets qpos and calls mj_forward (very stable; default)
+// - dynamic: uses MuJoCo actuators via ctrl + mj_step (more realistic; may be unstable depending on environment)
+let controlMode = "kinematic";
+const KIN_TAU = 0.040; // [s] smoothing time constant for kinematic updates
 
 // =============================
 // MuJoCo + Three state
@@ -160,6 +169,51 @@ function getPenWorld() {
   return { x: data.site_xpos[0], y: data.site_xpos[1], z: data.site_xpos[2] };
 }
 
+function setControlMode(mode) {
+  const m = String(mode || "").toLowerCase();
+  if (m !== "kinematic" && m !== "dynamic") return;
+  controlMode = m;
+  if (selControlMode && selControlMode.value !== m) selControlMode.value = m;
+
+  // switching modes: wipe velocities to avoid carrying unstable dynamics into the new mode
+  if (data && data.qvel) {
+    for (let i = 0; i < data.qvel.length; i++) data.qvel[i] = 0;
+  }
+  if (data && data.ctrl && m === "kinematic") {
+    // keep ctrl consistent (some bindings still expect ctrl to be valid)
+    for (let i = 0; i < Math.min(data.ctrl.length, data.qpos.length); i++) {
+      data.ctrl[i] = data.qpos[i];
+    }
+  }
+}
+
+function resetSimHome({ clearQueue = true } = {}) {
+  if (!mujoco || !model || !data) return;
+  if (clearQueue) {
+    commandQueue = [];
+    currentStrokeCmds = [];
+  }
+  // reset pose
+  data.qpos[0] = 0.0;
+  data.qpos[1] = 0.8;
+  data.qpos[2] = -0.8;
+  data.qpos[3] = PEN_UP;
+  if (data.qvel) for (let i = 0; i < data.qvel.length; i++) data.qvel[i] = 0;
+  if (data.ctrl) {
+    data.ctrl[0] = data.qpos[0];
+    data.ctrl[1] = data.qpos[1];
+    data.ctrl[2] = data.qpos[2];
+    data.ctrl[3] = data.qpos[3];
+  }
+  // reset executed stroke state
+  execPenDown = false;
+  currentExecStroke = null;
+
+  mujoco.mj_forward(model, data);
+  accumulator = 0;
+  lastFrameTime = performance.now();
+}
+
 // IK parameters (XML のリンク長に合わせる)
 const L1 = 0.20;
 const L2 = 0.20;
@@ -227,6 +281,10 @@ chkShowExec.addEventListener("change", () => {
   showExecuted = chkShowExec.checked;
 });
 
+selControlMode?.addEventListener("change", () => {
+  setControlMode(selControlMode.value);
+});
+
 btnClear.addEventListener("click", () => {
   targetStrokes = [];
   executedStrokes = [];
@@ -237,15 +295,11 @@ btnClear.addEventListener("click", () => {
 });
 
 btnHome.addEventListener("click", () => {
-  commandQueue = [];
-  currentStrokeCmds = [];
-  // ホーム姿勢へ（ctrl に入れるだけ）
-  if (data) {
-    data.ctrl[0] = 0.0;
-    data.ctrl[1] = 0.8;
-    data.ctrl[2] = -0.8;
-    data.ctrl[3] = PEN_UP;
-  }
+  resetSimHome({ clearQueue: true });
+});
+
+btnReset?.addEventListener("click", () => {
+  resetSimHome({ clearQueue: true });
 });
 
 // =============================
@@ -585,6 +639,22 @@ let fpsCounter = { frames: 0, last: performance.now(), fps: 0 };
 let execPenDown = false;
 let currentExecStroke = null;
 
+function stateLooksExploded() {
+  if (!data) return false;
+  const qpos = data.qpos;
+  const qvel = data.qvel;
+  const check = (arr, maxAbs) => {
+    if (!arr) return false;
+    for (let i = 0; i < Math.min(arr.length, 8); i++) {
+      const v = arr[i];
+      if (!Number.isFinite(v) || Math.abs(v) > maxAbs) return true;
+    }
+    return false;
+  };
+  // Hinge joints in this demo should stay within a few radians. Anything enormous means the sim blew up.
+  return check(qpos, 50) || check(qvel, 1e5);
+}
+
 function recordExecutedPoint(penWorld, penIsDown) {
   // pen down -> start or continue stroke
   if (penIsDown) {
@@ -608,33 +678,67 @@ function recordExecutedPoint(penWorld, penIsDown) {
 }
 
 function stepOnce() {
+  // If the physics diverged (NaN/Inf or enormous values), auto-reset.
+  // This prevents "exploded" states from contaminating drawing output.
+  if (stateLooksExploded()) {
+    console.warn("[reset] state exploded; resetting to home");
+    resetSimHome({ clearQueue: true });
+    return;
+  }
+
   // decide current command
   const cmd = commandQueue.length > 0 ? commandQueue[0] : null;
 
   // desired pen height
   const penDesired = cmd && cmd.penDown ? PEN_DOWN : PEN_UP;
 
-  // IK
+  // IK -> desired joint angles
+  let qDes = null;
   if (cmd) {
     const q = pickIKSolution(cmd.x, cmd.y);
     if (q) {
-      data.ctrl[0] = q[0];
-      data.ctrl[1] = q[1];
-      data.ctrl[2] = q[2];
+      qDes = q;
     } else {
       // unreachable -> drop
       commandQueue.shift();
     }
-  } else {
-    // hold current
-    data.ctrl[0] = data.qpos[0];
-    data.ctrl[1] = data.qpos[1];
-    data.ctrl[2] = data.qpos[2];
   }
-  data.ctrl[3] = penDesired;
+  if (!qDes) qDes = [data.qpos[0], data.qpos[1], data.qpos[2]];
 
-  // physics step
-  mujoco.mj_step(model, data);
+  if (controlMode === "dynamic") {
+    // Use actuators: ctrl = desired joint angle/slide position
+    if (data.ctrl) {
+      data.ctrl[0] = wrapToPi(qDes[0]);
+      data.ctrl[1] = wrapToPi(qDes[1]);
+      data.ctrl[2] = wrapToPi(qDes[2]);
+      data.ctrl[3] = penDesired;
+    }
+    mujoco.mj_step(model, data);
+  } else {
+    // Kinematic: directly move qpos toward qDes (stable across environments)
+    const dt = model?.opt?.timestep ?? 0.002;
+    const a = dt / (KIN_TAU + dt);
+
+    // hinge joints: smallest-angle update
+    for (let i = 0; i < 3; i++) {
+      const qc = data.qpos[i];
+      const d = angleDiff(qDes[i], qc);
+      data.qpos[i] = wrapToPi(qc + a * d);
+    }
+    // slide joint (pen)
+    data.qpos[3] = data.qpos[3] + a * (penDesired - data.qpos[3]);
+
+    // zero velocities to avoid accumulating energy in kinematic mode
+    if (data.qvel) {
+      for (let i = 0; i < Math.min(data.qvel.length, 4); i++) data.qvel[i] = 0;
+    }
+    // keep ctrl consistent (helps some bindings / tests)
+    if (data.ctrl) {
+      for (let i = 0; i < Math.min(data.ctrl.length, 4); i++) data.ctrl[i] = data.qpos[i];
+    }
+
+    mujoco.mj_forward(model, data);
+  }
 
   // pen tip position
   const penWorld = getPenWorld();
@@ -729,6 +833,9 @@ async function boot() {
     model = mujoco.MjModel.loadFromXML("/working/arm_pen.xml");
     data = new mujoco.MjData(model);
 
+    // Apply control mode from UI (default: kinematic)
+    if (selControlMode) setControlMode(selControlMode.value);
+
 // lookup pen tip site id
 penSiteId = lookupSiteIdByName(PEN_SITE_NAME);
 if (penSiteId < 0) {
@@ -762,6 +869,9 @@ window.app = {
   mujoco,
   model,
   data,
+  get controlMode() { return controlMode; },
+  setControlMode,
+  resetSimHome,
   workspace,
   L1, L2, L3,
   PEN_UP, PEN_DOWN,

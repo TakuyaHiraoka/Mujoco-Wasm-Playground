@@ -27,7 +27,16 @@
       <div class="controls">
         <button id="btnClear" title="ターゲット/実行結果を消去">Clear</button>
         <button id="btnHome" title="ホーム姿勢に戻す">Home</button>
+        <button id="btnReset" title="シミュレーション状態をホームにリセット（キューはクリア）">Reset</button>
         <button id="btnRunTests" title="セルフテストを実行（座標変換/IK/サイト参照など）">Run tests</button>
+
+        <label class="select" title="制御方式。Dynamics は環境によって不安定になることがあります。">
+          <span>Control</span>
+          <select id="selControlMode">
+            <option value="kinematic" selected>Kinematic (stable)</option>
+            <option value="dynamic">Dynamics (actuators)</option>
+          </select>
+        </label>
 
         <label class="toggle" title="描いている間に即追従する（ON） / 描き終わってから追従する（OFF）">
           <input type="checkbox" id="chkFollow" checked />
