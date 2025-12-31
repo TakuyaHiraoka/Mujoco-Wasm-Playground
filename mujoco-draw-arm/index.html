@@ -27,6 +27,7 @@
       <div class="controls">
         <button id="btnClear" title="ターゲット/実行結果を消去">Clear</button>
         <button id="btnHome" title="ホーム姿勢に戻す">Home</button>
+        <button id="btnRunTests" title="セルフテストを実行（座標変換/IK/サイト参照など）">Run tests</button>
 
         <label class="toggle" title="描いている間に即追従する（ON） / 描き終わってから追従する（OFF）">
           <input type="checkbox" id="chkFollow" checked />
@@ -67,6 +68,25 @@
       </span>
     </footer>
 
+
+<!-- Self-test / debug drawer -->
+<div id="testDrawer" class="testDrawer hidden" aria-hidden="true">
+  <div class="testHeader">
+    <div class="testTitle">Self tests</div>
+    <button id="btnCloseTests" class="testClose" title="閉じる">×</button>
+  </div>
+  <div class="testControls">
+    <button id="btnRunBasicTests" title="非侵襲（座標変換/IK/サイト参照など）">Run basic</button>
+    <button id="btnRunFullTests" title="一時的に姿勢/ctrl/キューを変更して検査（終了後に復元）">Run full</button>
+    <button id="btnCopyTestLog" title="ログをクリップボードにコピー">Copy log</button>
+  </div>
+  <pre id="testOutput" class="testOutput"></pre>
+  <div class="testHint">
+    URLに <code>?selftest=basic</code> または <code>?selftest=full</code> を付けると自動実行します。
+  </div>
+</div>
+
     <script type="module" src="./main.js"></script>
+    <script type="module" src="./tests.js"></script>
   </body>
 </html>

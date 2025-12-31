@@ -16,4 +16,6 @@
 
 
 # MuJoCo WASM Drawing Arm
-  https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/mujoco-draw-arm/
+- **Demo**:  
+  https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/mujoco-draw-arm/index.html?selftest=basic
+  https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/mujoco-draw-arm/index.html?selftest=full

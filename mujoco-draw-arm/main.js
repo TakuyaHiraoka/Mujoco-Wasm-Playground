@@ -81,6 +81,60 @@ let mujoco = null;
 let model = null;
 let data = null;
 
+
+
+// =============================
+// Debug/Test hooks
+// =============================
+let paused = false;
+function setPaused(v) { paused = !!v; }
+function isPaused() { return paused; }
+
+// Expose a promise that resolves when MuJoCo model/data are ready (for tests)
+// tests.js can await window.appReady
+if (!window.appReady) {
+  window.appReady = new Promise((resolve, reject) => {
+    window.__resolveAppReady = resolve;
+    window.__rejectAppReady = reject;
+  });
+}
+
+// Pen site lookup (DO NOT assume site index 0)
+const PEN_SITE_NAME = "pen_tip_site";
+let penSiteId = -1;
+
+function lookupSiteIdByName(name) {
+  if (!mujoco || !model) return -1;
+  try {
+    if (mujoco.mj_name2id && mujoco.mjtObj && mujoco.mjtObj.mjOBJ_SITE !== undefined) {
+      return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name);
+    }
+  } catch (e) {}
+  // fallback for potential bindings
+  try {
+    if (model.site) {
+      return model.site(name);
+    }
+  } catch (e) {}
+  return -1;
+}
+
+function getSiteXpos(siteId) {
+  const i = 3 * siteId;
+  return {
+    x: data.site_xpos[i + 0],
+    y: data.site_xpos[i + 1],
+    z: data.site_xpos[i + 2],
+  };
+}
+
+function getPenWorld() {
+  if (!model || !data) return { x: 0, y: 0, z: 0 };
+  if (penSiteId >= 0) return getSiteXpos(penSiteId);
+  // last resort fallback (debug only)
+  return { x: data.site_xpos[0], y: data.site_xpos[1], z: data.site_xpos[2] };
+}
+
 // IK parameters (XML のリンク長に合わせる)
 const L1 = 0.20;
 const L2 = 0.20;
@@ -557,10 +611,11 @@ function stepOnce() {
   // physics step
   mujoco.mj_step(model, data);
 
-  // pen tip position (site 0 == pen_tip_site の想定)
-  const sx = data.site_xpos[0];
-  const sy = data.site_xpos[1];
-  const sz = data.site_xpos[2];
+  // pen tip position
+  const penWorld = getPenWorld();
+  const sx = penWorld.x;
+  const sy = penWorld.y;
+  const sz = penWorld.z;
 
   // pop command if reached
   if (cmd) {
@@ -603,7 +658,7 @@ function animate(now) {
 
   const simDt = model ? model.opt.timestep : 0.002;
   while (model && data && accumulator >= simDt) {
-    stepOnce();
+    if (!paused) stepOnce();
     accumulator -= simDt;
   }
 
@@ -611,11 +666,7 @@ function animate(now) {
     updateThreeTransformsFromData();
     renderer.render(scene, camera);
 
-    const penWorld = {
-      x: data.site_xpos[0],
-      y: data.site_xpos[1],
-      z: data.site_xpos[2],
-    };
+    const penWorld = getPenWorld();
     const targetCmd = commandQueue.length > 0 ? commandQueue[0] : null;
     redraw2DOverlay(penWorld, targetCmd);
 
@@ -653,6 +704,14 @@ async function boot() {
     model = mujoco.MjModel.loadFromXML("/working/arm_pen.xml");
     data = new mujoco.MjData(model);
 
+// lookup pen tip site id
+penSiteId = lookupSiteIdByName(PEN_SITE_NAME);
+if (penSiteId < 0) {
+  console.warn(`[warn] site "${PEN_SITE_NAME}" not found. Falling back to site 0 (debug only).`);
+}
+
+
+
     // init pose
     data.qpos[0] = 0.0;
     data.qpos[1] = 0.8;
@@ -673,10 +732,45 @@ async function boot() {
 
     statusEl.textContent = "ready";
 
+// expose for tests/debug
+window.app = {
+  mujoco,
+  model,
+  data,
+  workspace,
+  L1, L2, L3,
+  PEN_UP, PEN_DOWN,
+  PEN_SITE_NAME,
+  getPenWorld,
+  getSiteXpos,
+  canvasCssToWorld,
+  worldToCanvasCss,
+  ik3LinkPlanar,
+  clamp,
+  // simulation helpers
+  stepOnce,
+  setPaused,
+  isPaused,
+  // access to queues/strokes (read/write)
+  get commandQueue() { return commandQueue; },
+  set commandQueue(v) { commandQueue = v; },
+  get targetStrokes() { return targetStrokes; },
+  set targetStrokes(v) { targetStrokes = v; },
+  get executedStrokes() { return executedStrokes; },
+  set executedStrokes(v) { executedStrokes = v; },
+  // low-level mujoco helpers
+  mj_forward: () => mujoco.mj_forward(model, data),
+  mj_step: () => mujoco.mj_step(model, data),
+};
+if (window.__resolveAppReady) window.__resolveAppReady(window.app);
+
+
+
     requestAnimationFrame(animate);
   } catch (err) {
     console.error(err);
     statusEl.textContent = "failed to load (see console)";
+    if (window.__rejectAppReady) window.__rejectAppReady(err);
   }
 }
 

@@ -148,3 +148,72 @@ code {
     min-height: 360px;
   }
 }
+
+
+
+/* =============================
+   Self-test drawer
+   ============================= */
+.testDrawer {
+  position: fixed;
+  right: 12px;
+  top: 12px;
+  width: min(720px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  background: rgba(17, 19, 26, 0.96);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  overflow: hidden;
+  z-index: 1000;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+.testDrawer.hidden {
+  display: none;
+}
+
+.testHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.testTitle {
+  font-weight: 700;
+}
+
+.testClose {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.testControls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.testOutput {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 10px;
+  margin: 0;
+  max-height: calc(100vh - 180px);
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
+
+.testHint {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
