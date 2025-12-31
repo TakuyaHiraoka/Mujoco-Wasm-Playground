@@ -10,6 +10,27 @@ function nowMs() {
   return performance.now();
 }
 
+function toMjtEnumInt(v) {
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  if (v && typeof v === "object") {
+    if (typeof v.value === "number") return v.value;
+    if (typeof v.value === "function") {
+      const n = v.value();
+      if (typeof n === "number") return n;
+    }
+    if (typeof v.valueOf === "function") {
+      const n = v.valueOf();
+      if (typeof n === "number") return n;
+    }
+    if ("__value" in v && typeof v.__value === "number") return v.__value;
+  }
+  return NaN;
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -135,7 +156,24 @@ async function runBasicTests(app, outEl) {
     return `nu=${app.model.nu ?? "?"}, nq=${app.model.nq ?? "?"}, nsite=${app.model.nsite ?? "?"}`;
   });
 
-  await runOne(outEl, "Pen site lookup (by name)", async () => {
+  
+  await runOne(outEl, "State snapshot (qpos/ctrl/qvel)", async () => {
+    const qpos = Array.from(app.data.qpos || []).slice(0, 8).map((v) => fmt(v,4)).join(", ");
+    const qvel = Array.from(app.data.qvel || []).slice(0, 8).map((v) => fmt(v,4)).join(", ");
+    const ctrl = Array.from(app.data.ctrl || []).slice(0, 8).map((v) => fmt(v,4)).join(", ");
+    return `qpos=[${qpos}]\nqvel=[${qvel}]\nctrl=[${ctrl}]`;
+  });
+  await runOne(outEl, "Model option snapshot (timestep/gravity/disableflags)", async () => {
+    const opt = app.model?.opt;
+    if (!opt) return "model.opt not available";
+    const ts = opt.timestep;
+    const g = opt.gravity ? Array.from(opt.gravity).slice(0,3).map((v)=>fmt(v,3)).join(", ") : "(n/a)";
+    const dis = opt.disableflags ?? "(n/a)";
+    return `timestep=${ts}\ngravity=[${g}]\ndisableflags=${dis}`;
+  });
+
+
+await runOne(outEl, "Pen site lookup (by name)", async () => {
     const mj = app.mujoco;
     const model = app.model;
     const data = app.data;
@@ -144,7 +182,9 @@ async function runBasicTests(app, outEl) {
     if (!mj.mj_name2id || !mj.mjtObj) {
       return "mj_name2id not available in this binding; skip strict check";
     }
-    const sid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, name);
+    const t = toMjtEnumInt(mj.mjtObj.mjOBJ_SITE);
+    if (!Number.isFinite(t)) return "mjtObj.mjOBJ_SITE is not numeric in this binding; skip strict check";
+    const sid = mj.mj_name2id(model, t, name);
     if (sid < 0) throw new Error(`site "${name}" not found in model (check XML site name)`);
     const i = 3 * sid;
     const p = { x: data.site_xpos[i + 0], y: data.site_xpos[i + 1], z: data.site_xpos[i + 2] };
@@ -296,6 +336,33 @@ async function runFullTests(app, outEl) {
       if (!nu || !data.ctrl) return "no actuators/ctrl available; skip";
 
       const lines = [];
+      // Report ctrl limits if available (helps diagnose ctrl clamping)
+      const limInfo = [];
+      try {
+        if (model.actuator_ctrllimited && model.actuator_ctrlrange) {
+          for (let ai = 0; ai < Math.min(nu, 8); ai++) {
+            const lim = model.actuator_ctrllimited[ai];
+            const lo = model.actuator_ctrlrange[2 * ai + 0];
+            const hi = model.actuator_ctrlrange[2 * ai + 1];
+            limInfo.push(`act[${ai}] ctrllimited=${lim} ctrlrange=[${fmt(lo,4)}, ${fmt(hi,4)}]`);
+          }
+        }
+      } catch (e) {}
+      if (limInfo.length) {
+        lines.push("actuator ctrllimited/ctrlrange:");
+        for (const s of limInfo) lines.push(s);
+      } else {
+        lines.push("actuator ctrl limits: (not available)");
+      }
+
+      // Put system in a known nontrivial pose to avoid "already at target" false negatives.
+      try {
+        const qHome = [0.0, 0.8, -0.8, app.PEN_UP ?? 0.03];
+        for (let i = 0; i < Math.min(qHome.length, data.qpos.length); i++) data.qpos[i] = qHome[i];
+        for (let i = 0; i < Math.min(qHome.length, data.ctrl.length); i++) data.ctrl[i] = qHome[i];
+        // zero velocities (optional)
+        if (data.qvel) for (let i = 0; i < Math.min(data.qvel.length, 8); i++) data.qvel[i] = 0;
+      } catch (e) {}
       // settle
       mj.mj_forward(model, data);
 

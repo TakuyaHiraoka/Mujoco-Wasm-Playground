@@ -71,10 +71,10 @@
   <!-- 位置サーボ（ctrlが目標関節角/位置） -->
   <actuator>
     <!-- gains tuned for browser demo stability (avoid high-frequency jitter) -->
-    <position name="act_shoulder" joint="shoulder" kp="40" kv="10"/>
-    <position name="act_elbow" joint="elbow" kp="40" kv="10"/>
-    <position name="act_wrist" joint="wrist" kp="25" kv="6"/>
-    <position name="act_pen_z" joint="pen_z" kp="120" kv="24"/>
+    <position name="act_shoulder" joint="shoulder" kp="40" kv="10" ctrllimited="true" ctrlrange="-3.1416 3.1416"/>
+    <position name="act_elbow" joint="elbow" kp="40" kv="10" ctrllimited="true" ctrlrange="-3.1416 3.1416"/>
+    <position name="act_wrist" joint="wrist" kp="25" kv="6" ctrllimited="true" ctrlrange="-3.1416 3.1416"/>
+    <position name="act_pen_z" joint="pen_z" kp="120" kv="24" ctrllimited="true" ctrlrange="-0.02 0.05"/>
   </actuator>
 
   <keyframe>

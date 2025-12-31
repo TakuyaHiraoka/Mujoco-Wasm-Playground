@@ -103,11 +103,36 @@ if (!window.appReady) {
 const PEN_SITE_NAME = "pen_tip_site";
 let penSiteId = -1;
 
+function toMjtEnumInt(v) {
+  // Some mujoco-js builds expose enums as embind objects, not plain numbers.
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  if (v && typeof v === "object") {
+    if (typeof v.value === "number") return v.value;
+    if (typeof v.value === "function") {
+      const n = v.value();
+      if (typeof n === "number") return n;
+    }
+    if (typeof v.valueOf === "function") {
+      const n = v.valueOf();
+      if (typeof n === "number") return n;
+    }
+    if ("__value" in v && typeof v.__value === "number") return v.__value;
+  }
+  return NaN;
+}
+
+
 function lookupSiteIdByName(name) {
   if (!mujoco || !model) return -1;
   try {
     if (mujoco.mj_name2id && mujoco.mjtObj && mujoco.mjtObj.mjOBJ_SITE !== undefined) {
-      return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name);
+      const t = toMjtEnumInt(mujoco.mjtObj.mjOBJ_SITE);
+      if (!Number.isFinite(t)) throw new Error("mjtObj.mjOBJ_SITE not numeric");
+      return mujoco.mj_name2id(model, t, name);
     }
   } catch (e) {}
   // fallback for potential bindings
