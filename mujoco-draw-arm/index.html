@@ -27,6 +27,7 @@
       <div class="controls">
         <button id="btnClear" title="ターゲット/実行結果を消去">Clear</button>
         <button id="btnHome" title="ホーム姿勢に戻す">Home</button>
+        <button id="btnDiag" title="座標変換・IK・3Dインクのセルフテスト">Diagnostics</button>
 
         <label class="toggle" title="描いている間に即追従する（ON） / 描き終わってから追従する（OFF）">
           <input type="checkbox" id="chkFollow" checked />
@@ -51,6 +52,27 @@
         <span id="status" class="status">loading…</span>
       </div>
     </header>
+
+    <!-- Diagnostics panel (self-tests) -->
+    <div id="diagPanel" class="diag hidden" aria-hidden="true">
+      <div class="diag-head">
+        <div class="diag-title">Diagnostics</div>
+        <button id="btnDiagClose" class="diag-close" title="閉じる">×</button>
+      </div>
+      <div class="diag-body">
+        <div class="diag-actions">
+          <button id="btnTestBasic">Run basic tests</button>
+          <button id="btnTestInk">Add test ink</button>
+          <button id="btnTestPath">Run path test</button>
+          <button id="btnClearLog" title="ログを消去">Clear log</button>
+          <button id="btnCopyLog" title="ログをコピー">Copy log</button>
+        </div>
+        <pre id="diagLog" class="diag-log"></pre>
+        <div class="diag-note">
+          3Dインクが見えない場合は <code>Add test ink</code> を押して、キャンバス中央に点が出るか確認してください。
+        </div>
+      </div>
+    </div>
 
     <main class="layout">
       <section class="panel">

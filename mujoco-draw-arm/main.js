@@ -21,11 +21,22 @@ const statusEl = document.getElementById("status");
 
 const btnClear = document.getElementById("btnClear");
 const btnHome = document.getElementById("btnHome");
+const btnDiag = document.getElementById("btnDiag");
 
 const chkFollow = /** @type {HTMLInputElement} */ (document.getElementById("chkFollow"));
 const chkShowTarget = /** @type {HTMLInputElement} */ (document.getElementById("chkShowTarget"));
 const chkShowExec = /** @type {HTMLInputElement} */ (document.getElementById("chkShowExec"));
 const chkShowInk3D = /** @type {HTMLInputElement} */ (document.getElementById("chkShowInk3D"));
+
+// Diagnostics panel
+const diagPanel = document.getElementById("diagPanel");
+const btnDiagClose = document.getElementById("btnDiagClose");
+const btnTestBasic = document.getElementById("btnTestBasic");
+const btnTestInk = document.getElementById("btnTestInk");
+const btnTestPath = document.getElementById("btnTestPath");
+const btnClearLog = document.getElementById("btnClearLog");
+const btnCopyLog = document.getElementById("btnCopyLog");
+const diagLog = document.getElementById("diagLog");
 
 const ctx2d = drawCanvas.getContext("2d");
 
@@ -74,10 +85,45 @@ let currentTargetStroke = null;
 /** @type {Array<{x:number,y:number,penDown:boolean}>} */
 let currentStrokeCmds = [];
 
+/** @type {{x:number,y:number} | null} */
+let lastWorldInStroke = null;
+
 let followWhileDrawing = true;
 let showTarget = true;
 let showExecuted = true;
 let showInk3D = true;
+
+// =============================
+// Diagnostics helpers
+// =============================
+function setDiagVisible(v) {
+  if (!diagPanel) return;
+  diagPanel.classList.toggle("hidden", !v);
+  diagPanel.setAttribute("aria-hidden", v ? "false" : "true");
+}
+
+function diagClear() {
+  if (diagLog) diagLog.textContent = "";
+}
+
+function diagLine(s) {
+  const line = String(s ?? "");
+  if (diagLog) {
+    diagLog.textContent += (diagLog.textContent ? "\n" : "") + line;
+    diagLog.scrollTop = diagLog.scrollHeight;
+  }
+  console.log("[diag]", line);
+}
+
+async function diagCopyToClipboard() {
+  try {
+    const text = diagLog ? diagLog.textContent : "";
+    await navigator.clipboard.writeText(text);
+    diagLine("(copied to clipboard)");
+  } catch (e) {
+    diagLine(`(copy failed: ${e})`);
+  }
+}
 
 // =============================
 // MuJoCo state
@@ -85,6 +131,9 @@ let showInk3D = true;
 let mujoco = null;
 let model = null;
 let data = null;
+
+/** @type {Array<{lo:number,hi:number}>} */
+let hingeRanges = [];
 
 const PEN_SITE_NAME = "pen_tip_site";
 let penSiteId = -1;
@@ -121,6 +170,20 @@ function lookupSiteIdByName(name) {
   return -1;
 }
 
+function lookupGeomIdByName(name) {
+  if (!mujoco || !model) return -1;
+  try {
+    if (mujoco.mj_name2id && mujoco.mjtObj && mujoco.mjtObj.mjOBJ_GEOM !== undefined) {
+      const t = toMjtEnumInt(mujoco.mjtObj.mjOBJ_GEOM);
+      if (!Number.isFinite(t)) throw new Error("mjtObj.mjOBJ_GEOM not numeric");
+      return mujoco.mj_name2id(model, t, name);
+    }
+  } catch (e) {
+    // ignore
+  }
+  return -1;
+}
+
 function getSiteXpos(siteId) {
   const i = 3 * siteId;
   return {
@@ -137,6 +200,47 @@ function getPenWorld() {
   return { x: data.site_xpos[0], y: data.site_xpos[1], z: data.site_xpos[2] };
 }
 
+function computeCanvasPlaneFromModel() {
+  if (!model || !data) return;
+  if (canvasGeomId < 0) {
+    canvasGeomId = lookupGeomIdByName(CANVAS_GEOM_NAME);
+  }
+  if (canvasGeomId < 0) {
+    canvasPlane = null;
+    return;
+  }
+
+  const gi = canvasGeomId;
+  const p = 3 * gi;
+  const r = 9 * gi;
+  const cx = data.geom_xpos[p + 0];
+  const cy = data.geom_xpos[p + 1];
+  const cz = data.geom_xpos[p + 2];
+
+  // local +Z axis in world = third column of row-major rotation matrix
+  const m02 = data.geom_xmat[r + 2];
+  const m12 = data.geom_xmat[r + 5];
+  const m22 = data.geom_xmat[r + 8];
+  let nx = m02, ny = m12, nz = m22;
+  const nlen = Math.hypot(nx, ny, nz);
+  if (!(nlen > 1e-12)) {
+    nx = 0;
+    ny = 0;
+    nz = 1;
+  } else {
+    nx /= nlen;
+    ny /= nlen;
+    nz /= nlen;
+  }
+
+  // for box geoms, geom_size stores half-sizes in local coordinates
+  const hz = model.geom_size[p + 2] ?? 0.0;
+
+  const p0 = new THREE.Vector3(cx + nx * hz, cy + ny * hz, cz + nz * hz);
+  const n = new THREE.Vector3(nx, ny, nz);
+  canvasPlane = { p0, n };
+}
+
 // =============================
 // IK / kinematic control params
 // =============================
@@ -148,11 +252,15 @@ const MAX_REACH = L1 + L2 + L3 - 0.005;
 const PEN_UP = 0.03;
 const PEN_DOWN = -0.012;
 
-const TARGET_EPS = 0.010;
-const MOVE_EPS = 0.012;
+// Resampling step (world meters) to make path tracking smooth even when input points are sparse.
+const PATH_STEP = 0.006;
 
-const JOINT_MAX_RATE = 8.0; // rad/s
-const PEN_MAX_RATE = 0.20; // m/s
+// When using a resampled path, keep the reach threshold smaller than the step to avoid skipping many points.
+const TARGET_EPS = 0.0045;
+const MOVE_EPS = 0.008;
+
+const JOINT_MAX_RATE = 7.0; // rad/s (kinematic slew)
+const PEN_MAX_RATE = 0.30; // m/s
 
 function angleDiff(a, b) {
   // smallest signed diff (a-b) in (-pi,pi]
@@ -211,6 +319,7 @@ btnClear.addEventListener("click", () => {
   isPointerDown = false;
   currentTargetStroke = null;
   currentStrokeCmds = [];
+  lastWorldInStroke = null;
   clearInk3D();
 });
 
@@ -224,8 +333,23 @@ btnHome.addEventListener("click", () => {
     data.qpos[2] = -0.8;
     data.qpos[3] = PEN_UP;
     mujoco.mj_forward(model, data);
+
+    // Compute the canvas plane for 3D ink placement.
+    computeCanvasPlaneFromModel();
   }
 });
+
+// Diagnostics panel UI
+btnDiag?.addEventListener("click", () => {
+  const isHidden = diagPanel?.classList.contains("hidden");
+  setDiagVisible(isHidden);
+});
+btnDiagClose?.addEventListener("click", () => setDiagVisible(false));
+btnClearLog?.addEventListener("click", () => diagClear());
+btnCopyLog?.addEventListener("click", () => diagCopyToClipboard());
+btnTestBasic?.addEventListener("click", () => runSelfTestBasic());
+btnTestInk?.addEventListener("click", () => addTestInk());
+btnTestPath?.addEventListener("click", () => runSelfTestPath());
 
 // =============================
 // Pointer input on draw canvas
@@ -233,6 +357,22 @@ btnHome.addEventListener("click", () => {
 function getPointerPosCss(e) {
   const rect = drawCanvas.getBoundingClientRect();
   return { px: e.clientX - rect.left, py: e.clientY - rect.top };
+}
+
+function resampleSegment(a, b, step) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dist = Math.hypot(dx, dy);
+  if (!(dist > 1e-9)) return [];
+  const n = Math.max(0, Math.floor(dist / step));
+  const pts = [];
+  for (let i = 1; i <= n; i++) {
+    const t = (i * step) / dist;
+    pts.push({ x: a.x + dx * t, y: a.y + dy * t });
+  }
+  // always include end point
+  pts.push({ x: b.x, y: b.y });
+  return pts;
 }
 
 function pushTargetPoint(px, py) {
@@ -259,11 +399,19 @@ function pushTargetPoint(px, py) {
     const down = { x, y, penDown: true };
     currentStrokeCmds.push(move, down);
     if (followWhileDrawing) commandQueue.push(move, down);
-  } else {
-    const down = { x, y, penDown: true };
+    lastWorldInStroke = { x, y };
+    return;
+  }
+
+  // For smooth tracking, resample the segment at nearly constant world spacing.
+  const prev = lastWorldInStroke ?? { x, y };
+  const segPts = resampleSegment(prev, { x, y }, PATH_STEP);
+  for (const p of segPts) {
+    const down = { x: p.x, y: p.y, penDown: true };
     currentStrokeCmds.push(down);
     if (followWhileDrawing) commandQueue.push(down);
   }
+  lastWorldInStroke = { x, y };
 }
 
 drawCanvas.addEventListener("pointerdown", (e) => {
@@ -274,6 +422,7 @@ drawCanvas.addEventListener("pointerdown", (e) => {
   currentStrokeCmds = [];
   currentTargetStroke = [];
   targetStrokes.push(currentTargetStroke);
+  lastWorldInStroke = null;
 
   const { px, py } = getPointerPosCss(e);
   pushTargetPoint(px, py);
@@ -308,6 +457,7 @@ function endStroke(e) {
 
   currentTargetStroke = null;
   currentStrokeCmds = [];
+  lastWorldInStroke = null;
 }
 
 drawCanvas.addEventListener("pointerup", endStroke);
@@ -467,21 +617,33 @@ function updateThreeTransformsFromData() {
 }
 
 // ===== 3D ink (instanced spheres) =====
-const CANVAS_SURFACE_Z = 0.0;
-const INK_Z_OFFSET = 0.001;
-const INK_RADIUS = 0.0026;
-const MAX_INK_DOTS = 60000;
+// We compute the canvas surface plane from the MuJoCo geom named "canvas", so that ink placement
+// stays correct even if you move/rotate the canvas in the XML.
+const CANVAS_GEOM_NAME = "canvas";
+let canvasGeomId = -1;
+/** @type {{p0:THREE.Vector3, n:THREE.Vector3} | null} */
+let canvasPlane = null;
+
+// Make ink clearly visible (bigger + unlit material).
+const INK_RADIUS = 0.004;
+const INK_Z_OFFSET = 0.005; // lift above the surface to avoid z-fighting
+const MAX_INK_DOTS = 120000;
 
 /** @type {THREE.InstancedMesh | null} */
 let inkMesh = null;
 let inkCount = 0;
 let tmpMat4 = new THREE.Matrix4();
+let tmpV3 = new THREE.Vector3();
+let tmpV3b = new THREE.Vector3();
 
 function createInk3D() {
   const geom = new THREE.SphereGeometry(INK_RADIUS, 12, 10);
-  const mat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.95, metalness: 0.0 });
+  // Unlit material makes tiny dots visible under any lighting.
+  const mat = new THREE.MeshBasicMaterial({ color: 0x111111 });
 
   inkMesh = new THREE.InstancedMesh(geom, mat, MAX_INK_DOTS);
+  // Avoid frustum-culling bugs with instanced bounds (keeps ink visible when camera orbits).
+  inkMesh.frustumCulled = false;
   inkMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   inkMesh.count = 0;
   inkMesh.visible = showInk3D;
@@ -496,11 +658,22 @@ function clearInk3D() {
   inkMesh.instanceMatrix.needsUpdate = true;
 }
 
-function addInkDotWorld(x, y) {
+function addInkDotFromPoint(p) {
   if (!inkMesh) return;
   if (inkCount >= MAX_INK_DOTS) return;
+  // Project to the canvas surface plane (if available), and lift slightly above it.
+  if (canvasPlane) {
+    tmpV3.set(p.x, p.y, p.z);
+    tmpV3b.copy(tmpV3).sub(canvasPlane.p0);
+    const d = tmpV3b.dot(canvasPlane.n);
+    tmpV3.addScaledVector(canvasPlane.n, -d);
+    tmpV3.addScaledVector(canvasPlane.n, INK_Z_OFFSET);
+  } else {
+    tmpV3.set(p.x, p.y, INK_Z_OFFSET);
+  }
+
   tmpMat4.identity();
-  tmpMat4.setPosition(x, y, CANVAS_SURFACE_Z + INK_Z_OFFSET);
+  tmpMat4.setPosition(tmpV3.x, tmpV3.y, tmpV3.z);
   inkMesh.setMatrixAt(inkCount, tmpMat4);
   inkCount++;
   inkMesh.count = inkCount;
@@ -597,7 +770,7 @@ function recordExecutedPoint(penWorld, penIsDown) {
 
       // 3D ink: also decimate by the same criterion (in canvas space)
       if (!lastInkCanvasPt || Math.hypot(px - lastInkCanvasPt.x, py - lastInkCanvasPt.y) >= minDistPx) {
-        addInkDotWorld(penWorld.x, penWorld.y);
+        addInkDotFromPoint(penWorld);
         lastInkCanvasPt = { x: px, y: py };
       }
     }
@@ -633,7 +806,13 @@ function stepOnce() {
   const maxDq = JOINT_MAX_RATE * simDt;
   for (let i = 0; i < 3; i++) {
     const diff = angleDiff(qTarget[i], data.qpos[i]);
-    data.qpos[i] = wrapToPi(data.qpos[i] + clamp(diff, -maxDq, maxDq));
+    const dq = clamp(diff, -maxDq, maxDq);
+    let q = data.qpos[i] + dq;
+    // Clamp to the MuJoCo joint range to avoid wrap-around jumps near ±pi.
+    if (hingeRanges && hingeRanges[i]) {
+      q = clamp(q, hingeRanges[i].lo, hingeRanges[i].hi);
+    }
+    data.qpos[i] = q;
   }
 
   const maxDp = PEN_MAX_RATE * simDt;
@@ -649,14 +828,17 @@ function stepOnce() {
 
     if (cmd.penDown) {
       if (err < TARGET_EPS) {
-        // skip multiple nearby points
-        do {
-          commandQueue.shift();
-        } while (
+        // advance exactly one point (path is already resampled at near-constant spacing)
+        commandQueue.shift();
+        // drop duplicates (rare)
+        while (
           commandQueue.length > 0 &&
+          cmd.penDown &&
           commandQueue[0].penDown &&
-          Math.hypot(penWorld.x - commandQueue[0].x, penWorld.y - commandQueue[0].y) < TARGET_EPS
-        );
+          Math.hypot(commandQueue[0].x - penWorld.x, commandQueue[0].y - penWorld.y) < 1e-4
+        ) {
+          commandQueue.shift();
+        }
       }
     } else {
       // pen-up move / finish
@@ -666,8 +848,11 @@ function stepOnce() {
     }
   }
 
-  // Record executed strokes (use actual pen_z)
-  const penIsDown = data.qpos[3] < (PEN_UP + PEN_DOWN) * 0.5;
+  // Record executed strokes.
+  // In this demo (kinematic-only), we treat "pen-down" as a *commanded* state (cmd.penDown),
+  // not a physical contact/force state. This makes drawing deterministic and avoids issues if
+  // the pen-z slew is still in transit.
+  const penIsDown = cmd ? !!cmd.penDown : false;
   recordExecutedPoint(penWorld, penIsDown);
 
   return { penWorld, targetCmd: cmd };
@@ -708,6 +893,171 @@ function animate(now) {
 }
 
 // =============================
+// Self tests (browser-triggered)
+// =============================
+async function runSelfTestBasic() {
+  setDiagVisible(true);
+  diagClear();
+  diagLine("== Basic self-test ==");
+  const t0 = performance.now();
+
+  if (!mujoco || !model || !data) {
+    diagLine("❌ MuJoCo/model not loaded yet.");
+    return;
+  }
+
+  diagLine(`✅ model loaded | nq=${model.nq} | nu=${model.nu} | nsite=${model.nsite} | ngeom=${model.ngeom}`);
+
+  // Pen site
+  if (penSiteId >= 0) {
+    const p = getPenWorld();
+    diagLine(`✅ pen site: ${PEN_SITE_NAME} id=${penSiteId} | penWorld=(${p.x.toFixed(4)},${p.y.toFixed(4)},${p.z.toFixed(4)})`);
+  } else {
+    diagLine(`⚠️ pen site lookup failed (fallback) | nsite=${model.nsite}`);
+  }
+
+  // Canvas plane
+  computeCanvasPlaneFromModel();
+  if (canvasPlane) {
+    diagLine(
+      `✅ canvas plane (${CANVAS_GEOM_NAME}) id=${canvasGeomId} | p0=(${canvasPlane.p0.x.toFixed(4)},${canvasPlane.p0.y.toFixed(4)},${canvasPlane.p0.z.toFixed(4)}) n=(${canvasPlane.n.x.toFixed(3)},${canvasPlane.n.y.toFixed(3)},${canvasPlane.n.z.toFixed(3)})`
+    );
+  } else {
+    diagLine(`⚠️ canvas geom "${CANVAS_GEOM_NAME}" not found; ink will use a fixed Z.`);
+  }
+
+  // Ink mesh
+  if (inkMesh) {
+    diagLine(`✅ ink mesh ready | inkCount=${inkCount} | visible=${inkMesh.visible}`);
+  } else {
+    diagLine("❌ ink mesh is not created (Three.js scene not ready?)");
+  }
+
+  // Transform round-trip
+  let maxErr = 0;
+  for (let i = 0; i < 6; i++) {
+    const px = Math.random() * drawCssW;
+    const py = Math.random() * drawCssH;
+    const w = canvasCssToWorld(px, py);
+    const p2 = worldToCanvasCss(w.x, w.y);
+    const e = Math.hypot(px - p2.px, py - p2.py);
+    if (e > maxErr) maxErr = e;
+  }
+  diagLine(`✅ canvas↔world round-trip maxErr=${maxErr.toFixed(4)} px`);
+
+  const ms = performance.now() - t0;
+  diagLine(`(done in ${ms.toFixed(1)} ms)`);
+}
+
+function addTestInk() {
+  setDiagVisible(true);
+  if (!mujoco || !model || !data) {
+    diagLine("❌ MuJoCo/model not loaded yet.");
+    return;
+  }
+  if (!inkMesh) {
+    diagLine("❌ ink mesh not ready.");
+    return;
+  }
+  computeCanvasPlaneFromModel();
+
+  const before = inkCount;
+  // A small cross at the center of the workspace.
+  const cx = (workspace.xMin + workspace.xMax) * 0.5;
+  const cy = 0.0;
+  const dz = canvasPlane ? canvasPlane.p0.z : 0.0;
+
+  const pts = [
+    { x: cx, y: cy },
+    { x: cx + 0.01, y: cy },
+    { x: cx - 0.01, y: cy },
+    { x: cx, y: cy + 0.01 },
+    { x: cx, y: cy - 0.01 },
+    { x: cx + 0.02, y: cy },
+    { x: cx - 0.02, y: cy },
+    { x: cx, y: cy + 0.02 },
+    { x: cx, y: cy - 0.02 },
+  ];
+  for (const p of pts) addInkDotFromPoint({ x: p.x, y: p.y, z: dz });
+
+  diagLine(`✅ addTestInk: +${inkCount - before} dots (inkCount=${inkCount})`);
+}
+
+async function runSelfTestPath() {
+  setDiagVisible(true);
+  diagClear();
+  diagLine("== Path follow test (square) ==");
+  if (!mujoco || !model || !data) {
+    diagLine("❌ MuJoCo/model not loaded yet.");
+    return;
+  }
+
+  // This test clears current strokes/ink/queue.
+  targetStrokes = [];
+  executedStrokes = [];
+  commandQueue = [];
+  clearInk3D();
+  lastWorldInStroke = null;
+
+  // Home pose
+  data.qpos[0] = 0.0;
+  data.qpos[1] = 0.8;
+  data.qpos[2] = -0.8;
+  data.qpos[3] = PEN_UP;
+  mujoco.mj_forward(model, data);
+  computeCanvasPlaneFromModel();
+
+  // Build a square in a safe reachable region
+  const cx = (workspace.xMin + workspace.xMax) * 0.5;
+  const cy = 0.0;
+  const s = 0.10; // 10cm
+  const ptsW = [
+    { x: cx - s * 0.5, y: cy - s * 0.5 },
+    { x: cx + s * 0.5, y: cy - s * 0.5 },
+    { x: cx + s * 0.5, y: cy + s * 0.5 },
+    { x: cx - s * 0.5, y: cy + s * 0.5 },
+    { x: cx - s * 0.5, y: cy - s * 0.5 },
+  ];
+
+  // For target overlay
+  const stroke = ptsW.map((p) => {
+    const c = worldToCanvasCss(p.x, p.y);
+    return { x: c.px, y: c.py };
+  });
+  targetStrokes.push(stroke);
+
+  // Queue: move to start, pen-down, then follow edges
+  const p0 = ptsW[0];
+  commandQueue.push({ x: p0.x, y: p0.y, penDown: false });
+  commandQueue.push({ x: p0.x, y: p0.y, penDown: true });
+  for (let i = 0; i < ptsW.length - 1; i++) {
+    const seg = resampleSegment(ptsW[i], ptsW[i + 1], PATH_STEP);
+    for (const p of seg) commandQueue.push({ x: p.x, y: p.y, penDown: true });
+  }
+  const plast = ptsW[ptsW.length - 1];
+  commandQueue.push({ x: plast.x, y: plast.y, penDown: false });
+
+  const simDt = model.opt.timestep || 0.002;
+  const maxSteps = Math.floor(4.0 / simDt);
+  for (let i = 0; i < maxSteps; i++) {
+    stepOnce();
+    // yield to keep the UI responsive
+    if (i % 250 === 0) await new Promise((r) => setTimeout(r, 0));
+    if (commandQueue.length === 0) break;
+  }
+
+  diagLine(`queueRemaining=${commandQueue.length}`);
+  diagLine(`executedStrokes=${executedStrokes.length}`);
+  diagLine(`inkCount=${inkCount}`);
+
+  if (commandQueue.length === 0 && executedStrokes.length > 0 && inkCount > 0) {
+    diagLine("✅ Path test OK (ink + executed strokes present)");
+  } else {
+    diagLine("❌ Path test failed: queue did not drain or ink was not produced");
+  }
+}
+
+// =============================
 // Boot
 // =============================
 async function boot() {
@@ -725,6 +1075,13 @@ async function boot() {
 
     model = mujoco.MjModel.loadFromXML("/working/arm_pen.xml");
     data = new mujoco.MjData(model);
+
+    // Cache hinge joint ranges for kinematic clamping.
+    hingeRanges = [
+      { lo: model.jnt_range[0], hi: model.jnt_range[1] },
+      { lo: model.jnt_range[2], hi: model.jnt_range[3] },
+      { lo: model.jnt_range[4], hi: model.jnt_range[5] },
+    ];
 
     // Resolve pen site ID (fallback to 0 if lookup fails)
     penSiteId = lookupSiteIdByName(PEN_SITE_NAME);
