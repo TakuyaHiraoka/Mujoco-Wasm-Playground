@@ -26,10 +26,13 @@ const ctx2d = drawCanvas.getContext("2d");
 // モデル内の「キャンバス」(描画面)を想定したワークスペース範囲（world XY）
 // ※ arm_pen.xml のキャンバス geom のサイズ/位置に合わせています。
 const workspace = {
-  xMin: 0.05,
-  xMax: 0.45,
-  yMin: -0.16,
-  yMax: 0.16,
+  // NOTE:
+  // This is a *reachable* sub-rectangle of the visual canvas geom.
+  // The arm max reach is L1+L2+L3 = 0.46, so keep (x,y) within ~0.455.
+  xMin: 0.03,
+  xMax: 0.43,
+  yMin: -0.15,
+  yMax: 0.15,
 };
 
 // 2DキャンバスのCSSピクセルサイズ
@@ -83,18 +86,54 @@ const L1 = 0.20;
 const L2 = 0.20;
 const L3 = 0.06;
 
-// 末端の平面内姿勢（今回は描画に重要でないので 0 固定）
-const PHI = 0.0;
+// 末端の平面内姿勢
+// 以前は 0 固定にしていましたが、そうすると「位置的には届くが姿勢制約でIKが解けない」領域が出ます。
+// そこでターゲット方向に向ける（phi=atan2(y,x)）ことで到達不能点を大幅に減らします。
 
 // Pen (slide joint) desired positions
 const PEN_UP = 0.03;
 const PEN_DOWN = -0.012;
 
-// When pen tip z <= this (world), treat as "down"
-const PEN_CONTACT_Z = 0.0008;
+// When pen tip z <= this (world), treat as "down" (visual)
+// NOTE: this is only used as a backup; main down/up uses the pen slide joint (qpos[3]).
+const PEN_CONTACT_Z = 0.003;
 
 // IK reach tolerance for popping commands
-const TARGET_EPS = 0.003;
+// 3mm は厳しすぎてキューが詰まりやすいので、少し緩めます。
+const TARGET_EPS = 0.010;
+const MOVE_EPS = 0.012;
+
+function wrapToPi(rad) {
+  const twoPi = Math.PI * 2;
+  let r = rad % twoPi;
+  if (r <= -Math.PI) r += twoPi;
+  if (r > Math.PI) r -= twoPi;
+  return r;
+}
+
+function angleDiff(a, b) {
+  // smallest signed diff (a-b) in (-pi,pi]
+  return wrapToPi(a - b);
+}
+
+function pickIKSolution(cmdX, cmdY) {
+  // Choose phi to face the target direction.
+  const phi = Math.atan2(cmdY, cmdX);
+
+  const qDown = ik3LinkPlanar(cmdX, cmdY, L1, L2, L3, phi, "down");
+  const qUp = ik3LinkPlanar(cmdX, cmdY, L1, L2, L3, phi, "up");
+  if (!qDown && !qUp) return null;
+  if (qDown && !qUp) return qDown;
+  if (qUp && !qDown) return qUp;
+
+  // pick the solution closest to current joint angles to reduce flipping/jitter
+  const qcur = [data.qpos[0], data.qpos[1], data.qpos[2]];
+  const cost = (q) =>
+    Math.abs(angleDiff(q[0], qcur[0])) +
+    Math.abs(angleDiff(q[1], qcur[1])) +
+    Math.abs(angleDiff(q[2], qcur[2]));
+  return cost(qDown) <= cost(qUp) ? qDown : qUp;
+}
 
 // =============================
 // UI wiring
@@ -152,13 +191,22 @@ function pushTargetPoint(px, py) {
     if (d < minDist) return;
   }
 
+  const isFirst = pts.length === 0;
   pts.push({ x: px, y: py });
 
   const { x, y } = canvasCssToWorld(px, py);
-  currentStrokeCmds.push({ x, y, penDown: true });
 
-  if (followWhileDrawing) {
-    commandQueue.push({ x, y, penDown: true });
+  if (isFirst) {
+    // まず「ペンを上げたまま」スタート点へ移動 → その場でペンを下ろす。
+    // （これを入れないと、最初の点まで移動する途中も線が引かれてしまう）
+    const move = { x, y, penDown: false };
+    const down = { x, y, penDown: true };
+    currentStrokeCmds.push(move, down);
+    if (followWhileDrawing) commandQueue.push(move, down);
+  } else {
+    const down = { x, y, penDown: true };
+    currentStrokeCmds.push(down);
+    if (followWhileDrawing) commandQueue.push(down);
   }
 }
 
@@ -489,7 +537,7 @@ function stepOnce() {
 
   // IK
   if (cmd) {
-    const q = ik3LinkPlanar(cmd.x, cmd.y, L1, L2, L3, PHI, "down");
+    const q = pickIKSolution(cmd.x, cmd.y);
     if (q) {
       data.ctrl[0] = q[0];
       data.ctrl[1] = q[1];
@@ -514,21 +562,33 @@ function stepOnce() {
   const sy = data.site_xpos[1];
   const sz = data.site_xpos[2];
 
-  // pop command if reached (only for penDown target points)
-  if (cmd && cmd.penDown) {
+  // pop command if reached
+  if (cmd) {
     const err = Math.hypot(sx - cmd.x, sy - cmd.y);
-    if (err < TARGET_EPS) {
-      commandQueue.shift();
-    }
-  } else if (cmd && !cmd.penDown) {
-    // pen up command: once pen is lifted enough, drop it
-    if (data.qpos[3] > PEN_UP * 0.7) {
-      commandQueue.shift();
+    if (cmd.penDown) {
+      // drawing points: position tolerance only
+      if (err < TARGET_EPS) {
+        // allow skipping multiple nearby points (prevents queue congestion)
+        do {
+          commandQueue.shift();
+        } while (
+          commandQueue.length > 0 &&
+          commandQueue[0].penDown &&
+          Math.hypot(sx - commandQueue[0].x, sy - commandQueue[0].y) < TARGET_EPS
+        );
+      }
+    } else {
+      // pen-up move/finish: require both "close enough" and "pen lifted"
+      if (err < MOVE_EPS && data.qpos[3] > PEN_UP * 0.7) {
+        commandQueue.shift();
+      }
     }
   }
 
-  // record executed path when pen touches near z=0 plane
-  const penIsDown = sz <= PEN_CONTACT_Z;
+  // record executed path
+  // In this demo, the canvas is non-colliding for stability, so we treat "down" mainly
+  // by the slide joint value (qpos[3]). z-threshold is a fallback.
+  const penIsDown = data.qpos[3] < (PEN_UP + PEN_DOWN) * 0.5 || sz <= PEN_CONTACT_Z;
   recordExecutedPoint({ x: sx, y: sy, z: sz }, penIsDown);
 }
 

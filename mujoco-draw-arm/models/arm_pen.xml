@@ -19,7 +19,7 @@
             pos="0.23 0 -0.005"
             material="mat_canvas"
             rgba="1 1 1 1"
-            contype="1" conaffinity="1"/>
+            contype="0" conaffinity="0"/>
     </body>
 
     <!-- ロボットアーム（平面3リンク）: ベースを z=0.12 に配置 -->
@@ -27,19 +27,19 @@
       <geom name="base_geom" type="cylinder" size="0.03 0.02" rgba="0.30 0.30 0.30 1"/>
 
       <body name="link1" pos="0 0 0">
-        <joint name="shoulder" type="hinge" axis="0 0 1" damping="1"
+        <joint name="shoulder" type="hinge" axis="0 0 1" damping="2"
                limited="true" range="-3.1416 3.1416"/>
         <geom name="link1_geom" type="capsule" fromto="0 0 0 0.20 0 0"
               size="0.018" rgba="0.90 0.20 0.20 1"/>
 
         <body name="link2" pos="0.20 0 0">
-          <joint name="elbow" type="hinge" axis="0 0 1" damping="1"
+          <joint name="elbow" type="hinge" axis="0 0 1" damping="2"
                  limited="true" range="-3.1416 3.1416"/>
           <geom name="link2_geom" type="capsule" fromto="0 0 0 0.20 0 0"
                 size="0.016" rgba="0.20 0.90 0.20 1"/>
 
           <body name="link3" pos="0.20 0 0">
-            <joint name="wrist" type="hinge" axis="0 0 1" damping="0.5"
+            <joint name="wrist" type="hinge" axis="0 0 1" damping="1.2"
                    limited="true" range="-3.1416 3.1416"/>
             <geom name="link3_geom" type="capsule" fromto="0 0 0 0.06 0 0"
                   size="0.014" rgba="0.20 0.20 0.90 1"/>
@@ -47,7 +47,7 @@
             <!-- ペン（z方向スライド） -->
             <body name="pen" pos="0.06 0 0">
               <!-- +z が上。負のqで下げられるよう range を負側に持たせる -->
-              <joint name="pen_z" type="slide" axis="0 0 1" damping="5"
+              <joint name="pen_z" type="slide" axis="0 0 1" damping="8"
                      limited="true" range="-0.02 0.05"/>
 
               <!-- ペン胴: cylinder は center 指定なので、下向きに 0.055 ずらして長さ 0.11 -->
@@ -57,7 +57,7 @@
               <!-- ペン先（接触判定用） -->
               <geom name="pen_tip" type="sphere" size="0.003"
                     pos="0 0 -0.11" rgba="0 0 0 1"
-                    contype="1" conaffinity="1"/>
+                    contype="0" conaffinity="0"/>
 
               <!-- ペン先位置を JS から参照するための site -->
               <site name="pen_tip_site" pos="0 0 -0.11" size="0.004" rgba="0 0.3 1 1"/>
@@ -70,10 +70,11 @@
 
   <!-- 位置サーボ（ctrlが目標関節角/位置） -->
   <actuator>
-    <position name="act_shoulder" joint="shoulder" kp="80" kv="8"/>
-    <position name="act_elbow" joint="elbow" kp="80" kv="8"/>
-    <position name="act_wrist" joint="wrist" kp="40" kv="4"/>
-    <position name="act_pen_z" joint="pen_z" kp="300" kv="30"/>
+    <!-- gains tuned for browser demo stability (avoid high-frequency jitter) -->
+    <position name="act_shoulder" joint="shoulder" kp="40" kv="10"/>
+    <position name="act_elbow" joint="elbow" kp="40" kv="10"/>
+    <position name="act_wrist" joint="wrist" kp="25" kv="6"/>
+    <position name="act_pen_z" joint="pen_z" kp="120" kv="24"/>
   </actuator>
 
   <keyframe>
